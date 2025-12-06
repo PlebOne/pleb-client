@@ -194,7 +194,8 @@ pub async fn fetch_nip04_dms(
         .author(*user_pubkey)
         .limit(limit);
     
-    let timeout = Duration::from_secs(15);
+    // Reduced timeout for faster initial load
+    let timeout = Duration::from_secs(8);
     
     let (incoming, outgoing) = tokio::join!(
         client.fetch_events(incoming_filter, timeout),

@@ -203,6 +203,7 @@ use crate::nostr::{
 };
 use crate::core::config::Config;
 use crate::signer::SignerClient;
+use crate::bridge::dm_bridge::prefetch_dms;
 
 /// Feed types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,8 +500,8 @@ impl qobject::FeedController {
             if let Ok((display_name, picture)) = user_profile_result {
                 let qt_thread_clone = qt_thread.clone();
                 let _ = qt_thread_clone.queue(move |mut qobject| {
+                    tracing::info!("User profile loaded: {} (picture URL: {})", display_name, if picture.is_empty() { "none" } else { &picture });
                     qobject.as_mut().user_profile_loaded(&QString::from(&display_name), &QString::from(&picture));
-                    tracing::info!("User profile loaded: {} (picture: {})", display_name, !picture.is_empty());
                 });
             }
             
@@ -581,6 +582,10 @@ impl qobject::FeedController {
                     // Prefetch other feeds in background
                     prefetch_feed(FeedType::Replies);
                     prefetch_feed(FeedType::Global);
+                    
+                    // Prefetch DMs in background so they're ready when user navigates to messages
+                    let pubkey_for_dm_prefetch = pubkey_str.clone();
+                    prefetch_dms(pubkey_for_dm_prefetch);
                 }
                 Err(e) => {
                     let error_msg = e.clone();

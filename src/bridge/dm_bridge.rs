@@ -684,3 +684,170 @@ pub fn set_dm_nsec(nsec: Option<String>) {
     *dm_nsec = nsec;
     tracing::info!("DM nsec set for encryption/signing operations");
 }
+
+/// Prefetch DMs in the background during app initialization
+/// This runs in a separate thread so it doesn't block the UI
+pub fn prefetch_dms(user_pubkey: String) {
+    std::thread::spawn(move || {
+        tracing::info!("Background prefetching DMs for: {}", user_pubkey);
+        
+        let result = DM_RUNTIME.block_on(async {
+            let pk = PublicKey::parse(&user_pubkey)
+                .map_err(|e| format!("Invalid pubkey: {}", e))?;
+            
+            // Get or create relay client
+            let client = {
+                let c = DM_CLIENT.read().unwrap();
+                if let Some(client) = c.clone() {
+                    client
+                } else {
+                    drop(c);
+                    // Create client with keys for NIP-42 auth
+                    let client = {
+                        let nsec_opt = DM_NSEC.read().unwrap();
+                        if let Some(nsec) = nsec_opt.as_ref() {
+                            if let Ok(secret_key) = SecretKey::parse(nsec) {
+                                let keys = Keys::new(secret_key);
+                                Client::new(keys)
+                            } else {
+                                Client::default()
+                            }
+                        } else {
+                            Client::default()
+                        }
+                    };
+                    
+                    // Add default relays
+                    for relay in crate::nostr::relay::DEFAULT_RELAYS {
+                        let _ = client.add_relay(*relay).await;
+                    }
+                    client.connect().await;
+                    
+                    let mut c = DM_CLIENT.write().unwrap();
+                    *c = Some(client.clone());
+                    client
+                }
+            };
+            
+            // Fetch NIP-04 DMs
+            let events = fetch_nip04_dms(&client, &pk, 100).await?;
+            
+            // Process events into conversations
+            let mut conversations: std::collections::HashMap<String, Vec<(Event, bool)>> = std::collections::HashMap::new();
+            
+            for event in events.iter() {
+                if let Some(peer_pk) = get_nip04_peer(event, &pk) {
+                    let peer_hex = peer_pk.to_hex();
+                    let is_outgoing = event.pubkey == pk;
+                    conversations.entry(peer_hex).or_default().push((event.clone(), is_outgoing));
+                }
+            }
+            
+            // Get unique peer pubkeys for profile fetching
+            let peer_pubkeys: Vec<PublicKey> = conversations.keys()
+                .filter_map(|hex| PublicKey::parse(hex).ok())
+                .collect();
+            
+            // Fetch profiles
+            let profiles = if !peer_pubkeys.is_empty() {
+                let profile_filter = Filter::new()
+                    .kind(Kind::Metadata)
+                    .authors(peer_pubkeys.clone());
+                
+                client.fetch_events(profile_filter, DEFAULT_TIMEOUT).await.ok()
+            } else {
+                None
+            };
+            
+            // Parse profiles
+            let mut profile_map: std::collections::HashMap<String, ProfileCache> = std::collections::HashMap::new();
+            if let Some(profile_events) = profiles {
+                for event in profile_events.iter() {
+                    if let Ok(metadata) = Metadata::from_json(&event.content) {
+                        profile_map.insert(event.pubkey.to_hex(), ProfileCache::from_metadata(&metadata));
+                    }
+                }
+            }
+            
+            // Get nsec for decryption
+            let nsec_opt = {
+                let nsec = DM_NSEC.read().unwrap();
+                nsec.clone()
+            };
+            
+            Ok::<_, String>((conversations, profile_map, pk, nsec_opt))
+        });
+        
+        match result {
+            Ok((conversations, profiles, user_pk, nsec_opt)) => {
+                let mut dm_mgr = DM_MANAGER.write().unwrap();
+                dm_mgr.set_user_pubkey(user_pk);
+                
+                for (peer_hex, events) in conversations {
+                    let convo = dm_mgr.get_or_create_conversation(peer_hex.clone(), DmProtocol::Nip04);
+                    
+                    // Update profile info
+                    if let Some(profile) = profiles.get(&peer_hex) {
+                        convo.peer_name = profile.display_name.clone().or(profile.name.clone());
+                        convo.peer_picture = profile.picture.clone();
+                    } else {
+                        convo.peer_name = Some(format_pubkey_short(&peer_hex));
+                    }
+                    
+                    // Process messages - decrypt if we have nsec
+                    for (event, is_outgoing) in events {
+                        let event_id = event.id.to_hex();
+                        
+                        let content = if let Some(ref nsec) = nsec_opt {
+                            if let Ok(secret_key) = SecretKey::parse(nsec) {
+                                let peer_pk = if is_outgoing {
+                                    PublicKey::parse(&peer_hex).ok()
+                                } else {
+                                    Some(event.pubkey)
+                                };
+                                
+                                if let Some(pk) = peer_pk {
+                                    nip04::decrypt(&secret_key, &pk, &event.content).ok()
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        
+                        let display_content = content.unwrap_or_else(|| "[Encrypted message]".to_string());
+                        
+                        let msg = DmMessage {
+                            id: event_id,
+                            sender_pubkey: event.pubkey.to_hex(),
+                            recipient_pubkey: if is_outgoing { peer_hex.clone() } else { user_pk.to_hex() },
+                            content: display_content,
+                            created_at: event.created_at.as_secs() as i64,
+                            is_outgoing,
+                            protocol: DmProtocol::Nip04,
+                        };
+                        
+                        dm_mgr.add_message(msg);
+                    }
+                }
+                
+                let count = dm_mgr.get_conversations().len();
+                drop(dm_mgr);
+                
+                // Update cache timestamp
+                {
+                    let mut last_fetch = DM_LAST_FETCH.write().unwrap();
+                    *last_fetch = Some(std::time::Instant::now());
+                }
+                
+                tracing::info!("Background prefetched {} DM conversations", count);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to prefetch DMs: {}", e);
+            }
+        }
+    });
+}
