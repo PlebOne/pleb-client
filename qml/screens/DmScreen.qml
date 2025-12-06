@@ -8,6 +8,43 @@ Rectangle {
     color: "#0a0a0a"
     
     property var dmController: null
+    property var appController: null
+    
+    // Initialize when visible and controllers are ready
+    onVisibleChanged: {
+        if (visible && dmController && appController && appController.public_key.toString() !== "") {
+            console.log("[DEBUG] DmScreen visible, initializing DM controller")
+            dmController.initialize(appController.public_key)
+            dmController.load_conversations()
+        }
+    }
+    
+    // Connect to DM controller signals
+    Connections {
+        target: dmController
+        ignoreUnknownSignals: true
+        
+        function onConversations_updated() {
+            console.log("[DEBUG] Conversations updated, count:", dmController ? dmController.conversation_count : 0)
+            conversationList.model = dmController ? dmController.conversation_count : 0
+        }
+        
+        function onMessages_updated() {
+            console.log("[DEBUG] Messages updated")
+            if (dmController) {
+                var json = dmController.get_messages()
+                messageList.model = JSON.parse(json)
+            }
+        }
+        
+        function onMessage_sent(messageId) {
+            console.log("[DEBUG] Message sent:", messageId)
+        }
+        
+        function onError_occurred(error) {
+            console.log("[DEBUG] DM error:", error)
+        }
+    }
     
     RowLayout {
         anchors.fill: parent
@@ -43,6 +80,27 @@ Rectangle {
                         
                         Item { Layout.fillWidth: true }
                         
+                        // Refresh button
+                        Button {
+                            text: "↻"
+                            font.pixelSize: 18
+                            
+                            background: Rectangle {
+                                color: parent.pressed ? "#333333" : "transparent"
+                                radius: 8
+                            }
+                            
+                            contentItem: Text {
+                                text: parent.text
+                                color: "#888888"
+                                font: parent.font
+                            }
+                            
+                            onClicked: {
+                                if (dmController) dmController.refresh()
+                            }
+                        }
+                        
                         Button {
                             text: "+"
                             font.pixelSize: 20
@@ -63,8 +121,34 @@ Rectangle {
                     }
                 }
                 
+                // Loading indicator
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 40
+                    color: "#1a1a1a"
+                    visible: dmController && dmController.is_loading
+                    
+                    RowLayout {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        
+                        BusyIndicator {
+                            Layout.preferredWidth: 20
+                            Layout.preferredHeight: 20
+                            running: parent.visible
+                        }
+                        
+                        Text {
+                            text: "Loading..."
+                            color: "#888888"
+                            font.pixelSize: 13
+                        }
+                    }
+                }
+                
                 // Conversation list
                 ListView {
+                    id: conversationList
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
@@ -72,9 +156,10 @@ Rectangle {
                     model: dmController ? dmController.conversation_count : 0
                     
                     delegate: Rectangle {
-                        width: parent.width
+                        id: convoDelegate
+                        width: conversationList.width
                         height: 70
-                        color: dmController && dmController.selected_conversation === model.peerPubkey 
+                        color: convoData && dmController && dmController.selected_conversation.toString() === convoData.peerPubkey 
                             ? "#1a1a1a" : "transparent"
                         
                         property var convoData: null
@@ -82,12 +167,17 @@ Rectangle {
                         Component.onCompleted: {
                             if (dmController) {
                                 var json = dmController.get_conversation(index)
-                                convoData = JSON.parse(json)
+                                try {
+                                    convoData = JSON.parse(json)
+                                } catch (e) {
+                                    console.log("Failed to parse conversation:", e)
+                                }
                             }
                         }
                         
                         MouseArea {
                             anchors.fill: parent
+                            hoverEnabled: true
                             onClicked: {
                                 if (dmController && convoData) {
                                     dmController.select_conversation(convoData.peerPubkey)
@@ -103,8 +193,8 @@ Rectangle {
                             ProfileAvatar {
                                 Layout.preferredWidth: 46
                                 Layout.preferredHeight: 46
-                                name: convoData ? convoData.peerName || "?" : "?"
-                                imageUrl: convoData ? convoData.peerPicture || "" : ""
+                                name: convoDelegate.convoData ? convoDelegate.convoData.peerName || "?" : "?"
+                                imageUrl: convoDelegate.convoData ? convoDelegate.convoData.peerPicture || "" : ""
                             }
                             
                             ColumnLayout {
@@ -112,7 +202,7 @@ Rectangle {
                                 spacing: 4
                                 
                                 Text {
-                                    text: convoData ? convoData.peerName || "Unknown" : "Unknown"
+                                    text: convoDelegate.convoData ? convoDelegate.convoData.peerName || "Unknown" : "Unknown"
                                     color: "#ffffff"
                                     font.pixelSize: 14
                                     font.weight: Font.Medium
@@ -121,7 +211,7 @@ Rectangle {
                                 }
                                 
                                 Text {
-                                    text: convoData ? convoData.lastMessage || "" : ""
+                                    text: convoDelegate.convoData ? convoDelegate.convoData.lastMessage || "" : ""
                                     color: "#888888"
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
@@ -135,11 +225,11 @@ Rectangle {
                                 Layout.preferredHeight: 20
                                 radius: 10
                                 color: "#9333ea"
-                                visible: convoData && convoData.unreadCount > 0
+                                visible: convoDelegate.convoData && convoDelegate.convoData.unreadCount > 0
                                 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: convoData ? convoData.unreadCount : ""
+                                    text: convoDelegate.convoData ? convoDelegate.convoData.unreadCount : ""
                                     color: "#ffffff"
                                     font.pixelSize: 10
                                     font.weight: Font.Bold
@@ -151,10 +241,11 @@ Rectangle {
                     // Empty state
                     Text {
                         anchors.centerIn: parent
-                        text: "No conversations"
+                        text: "No conversations yet\nStart a new conversation!"
                         color: "#666666"
                         font.pixelSize: 14
-                        visible: parent.count === 0
+                        horizontalAlignment: Text.AlignHCenter
+                        visible: conversationList.count === 0 && !(dmController && dmController.is_loading)
                     }
                 }
             }

@@ -4,6 +4,8 @@
 
 mod bridge;
 mod core;
+mod nostr;
+mod signer;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 

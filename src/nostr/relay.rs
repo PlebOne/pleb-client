@@ -1,0 +1,538 @@
+//! Relay manager - handles connections to Nostr relays using nostr-sdk
+
+use std::sync::Arc;
+use std::time::Duration;
+use nostr_sdk::prelude::*;
+use std::sync::RwLock;
+
+/// Default relays for initial connection
+pub const DEFAULT_RELAYS: &[&str] = &[
+    "wss://relay.pleb.one",
+    "wss://relay.primal.net",
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+];
+
+/// Default timeout for relay operations
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Manages relay connections
+pub struct RelayManager {
+    client: Client,
+    connected: bool,
+    user_pubkey: Option<PublicKey>,
+    following: Vec<PublicKey>,
+}
+
+impl RelayManager {
+    /// Create a new relay manager
+    pub fn new() -> Self {
+        let client = Client::default();
+        Self {
+            client,
+            connected: false,
+            user_pubkey: None,
+            following: Vec::new(),
+        }
+    }
+    
+    /// Create relay manager with a signer (for posting)
+    pub fn with_keys(keys: Keys) -> Self {
+        let client = Client::new(keys);
+        Self {
+            client,
+            connected: false,
+            user_pubkey: None,
+            following: Vec::new(),
+        }
+    }
+    
+    /// Get the nostr-sdk client
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+    
+    /// Set the current user's pubkey
+    pub fn set_user_pubkey(&mut self, pubkey: PublicKey) {
+        self.user_pubkey = Some(pubkey);
+    }
+    
+    /// Get following list
+    pub fn following(&self) -> &[PublicKey] {
+        &self.following
+    }
+    
+    /// Set following list
+    pub fn set_following(&mut self, following: Vec<PublicKey>) {
+        self.following = following;
+    }
+    
+    /// Connect to default relays
+    pub async fn connect(&mut self) -> Result<(), String> {
+        tracing::info!("Connecting to {} default relays...", DEFAULT_RELAYS.len());
+        
+        for relay_url in DEFAULT_RELAYS {
+            if let Err(e) = self.client.add_relay(*relay_url).await {
+                tracing::warn!("Failed to add relay {}: {}", relay_url, e);
+            }
+        }
+        
+        self.client.connect().await;
+        self.connected = true;
+        
+        tracing::info!("Connected to relays");
+        Ok(())
+    }
+    
+    /// Connect to specific relays
+    pub async fn connect_to(&mut self, relay_urls: &[String]) -> Result<(), String> {
+        for url in relay_urls {
+            if let Err(e) = self.client.add_relay(url.as_str()).await {
+                tracing::warn!("Failed to add relay {}: {}", url, e);
+            }
+        }
+        
+        self.client.connect().await;
+        self.connected = true;
+        Ok(())
+    }
+    
+    /// Disconnect from all relays
+    pub async fn disconnect(&mut self) {
+        self.client.disconnect().await;
+        self.connected = false;
+    }
+    
+    /// Fetch the user's contact list (following)
+    pub async fn fetch_contact_list(&mut self, pubkey: &PublicKey) -> Result<Vec<PublicKey>, String> {
+        let filter = Filter::new()
+            .kind(Kind::ContactList)
+            .author(*pubkey)
+            .limit(1);
+        
+        let events = self.client
+            .fetch_events(filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch contact list: {}", e))?;
+        
+        let following: Vec<PublicKey> = events
+            .into_iter()
+            .flat_map(|e| {
+                e.tags
+                    .iter()
+                    .filter_map(|tag| {
+                        if let Some(TagStandard::PublicKey { public_key, .. }) = tag.as_standardized() {
+                            Some(public_key.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        
+        self.following = following.clone();
+        tracing::info!("Fetched {} contacts", self.following.len());
+        
+        Ok(following)
+    }
+    
+    /// Fetch all notes from followed users (posts, replies, reposts - everything)
+    pub async fn fetch_following_feed(&self, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        if self.following.is_empty() {
+            tracing::warn!("No following list, returning empty feed");
+            return Ok(Events::default());
+        }
+        
+        // Fetch text notes (kind 1) from following - includes posts and replies
+        let mut text_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .authors(self.following.clone())
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            text_filter = text_filter.until(ts);
+        }
+        
+        // Fetch reposts (kind 6) from following
+        let mut repost_filter = Filter::new()
+            .kind(Kind::Repost)
+            .authors(self.following.clone())
+            .limit((limit / 2) as usize);
+        
+        if let Some(ts) = until {
+            repost_filter = repost_filter.until(ts);
+        }
+        
+        // Fetch both in parallel
+        let (text_result, repost_result) = tokio::join!(
+            self.client.fetch_events(text_filter, DEFAULT_TIMEOUT),
+            self.client.fetch_events(repost_filter, DEFAULT_TIMEOUT)
+        );
+        
+        let mut combined = Events::default();
+        
+        // Add text notes
+        if let Ok(events) = text_result {
+            for event in events.into_iter() {
+                combined.insert(event);
+            }
+        }
+        
+        // Add reposts
+        if let Ok(events) = repost_result {
+            for event in events.into_iter() {
+                combined.insert(event);
+            }
+        }
+        
+        tracing::info!("Fetched {} total events for following feed", combined.len());
+        Ok(combined)
+    }
+    
+    /// Fetch home feed: posts from following + replies to those posts (combined view)
+    pub async fn fetch_home_feed(&self, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        if self.following.is_empty() {
+            tracing::warn!("No following list, returning empty feed");
+            return Ok(Events::default());
+        }
+        
+        // Fetch posts from following
+        let mut posts_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .authors(self.following.clone())
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            posts_filter = posts_filter.until(ts);
+        }
+        
+        let posts = self.client
+            .fetch_events(posts_filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch posts: {}", e))?;
+        
+        // Get recent post IDs for fetching replies
+        let event_ids: Vec<EventId> = posts.iter().take(50).map(|e| e.id).collect();
+        
+        // Combine posts with replies if we have event IDs
+        let mut combined = Events::default();
+        for event in posts.iter() {
+            combined.insert(event.clone());
+        }
+        
+        if !event_ids.is_empty() {
+            // Fetch replies to recent posts
+            let mut reply_filter = Filter::new()
+                .kind(Kind::TextNote)
+                .events(event_ids)
+                .limit((limit / 2) as usize);  // Get fewer replies
+            
+            if let Some(ts) = until {
+                reply_filter = reply_filter.until(ts);
+            }
+            
+            if let Ok(replies) = self.client.fetch_events(reply_filter, DEFAULT_TIMEOUT).await {
+                for event in replies.iter() {
+                    combined.insert(event.clone());
+                }
+            }
+        }
+        
+        Ok(combined)
+    }
+    
+    /// Fetch replies to posts from followed users
+    pub async fn fetch_replies_feed(&self, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        if self.following.is_empty() {
+            return Ok(Events::default());
+        }
+        
+        // First, get recent posts from following
+        let posts_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .authors(self.following.clone())
+            .limit(100);
+        
+        let posts = self.client
+            .fetch_events(posts_filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch posts: {}", e))?;
+        
+        // Get the event IDs
+        let event_ids: Vec<EventId> = posts.iter().map(|e| e.id).collect();
+        
+        if event_ids.is_empty() {
+            return Ok(Events::default());
+        }
+        
+        // Fetch replies to those posts
+        let mut reply_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .events(event_ids)
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            reply_filter = reply_filter.until(ts);
+        }
+        
+        self.client
+            .fetch_events(reply_filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch replies: {}", e))
+    }
+    
+    /// Fetch global feed (all text notes)
+    pub async fn fetch_global_feed(&self, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        let mut filter = Filter::new()
+            .kind(Kind::TextNote)
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            filter = filter.until(ts);
+        }
+        
+        self.client
+            .fetch_events(filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch global feed: {}", e))
+    }
+    
+    /// Fetch profile metadata for pubkeys
+    pub async fn fetch_profiles(&self, pubkeys: &[PublicKey]) -> Result<Events, String> {
+        if pubkeys.is_empty() {
+            return Ok(Events::default());
+        }
+        
+        let filter = Filter::new()
+            .kind(Kind::Metadata)
+            .authors(pubkeys.to_vec());
+        
+        self.client
+            .fetch_events(filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch profiles: {}", e))
+    }
+    
+    /// Fetch a single event by ID
+    pub async fn fetch_event(&self, event_id: &EventId) -> Result<Option<Event>, String> {
+        let filter = Filter::new()
+            .id(*event_id)
+            .limit(1);
+        
+        let events = self.client
+            .fetch_events(filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch event: {}", e))?;
+        
+        Ok(events.into_iter().next())
+    }
+    
+    /// Fetch thread for a note (parents + replies)
+    /// Returns (parent_chain, target_note, replies)
+    pub async fn fetch_thread(&self, event_id: &EventId) -> Result<(Vec<Event>, Option<Event>, Vec<Event>), String> {
+        // First fetch the target event
+        let target = self.fetch_event(event_id).await?;
+        
+        let Some(target_event) = target else {
+            return Err("Event not found".to_string());
+        };
+        
+        // Find parent event IDs from tags
+        let parent_ids: Vec<EventId> = target_event.tags.iter()
+            .filter_map(|tag| {
+                if let Some(TagStandard::Event { event_id, .. }) = tag.as_standardized() {
+                    Some(event_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        // Fetch parent events
+        let mut parents = Vec::new();
+        for parent_id in &parent_ids {
+            if let Ok(Some(parent)) = self.fetch_event(parent_id).await {
+                // Get grandparent IDs before moving parent
+                let grandparent_ids: Vec<EventId> = parent.tags.iter()
+                    .filter_map(|tag| {
+                        if let Some(TagStandard::Event { event_id, .. }) = tag.as_standardized() {
+                            Some(event_id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                
+                parents.push(parent);
+                
+                // Also try to get grandparent (one level up)
+                for gp_id in &grandparent_ids {
+                    if let Ok(Some(gp)) = self.fetch_event(gp_id).await {
+                        parents.push(gp);
+                    }
+                }
+            }
+        }
+        
+        // Sort parents by timestamp (oldest first for display)
+        parents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        
+        // Fetch replies to the target event
+        let reply_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .event(*event_id)
+            .limit(50);
+        
+        let replies = self.client
+            .fetch_events(reply_filter, DEFAULT_TIMEOUT)
+            .await
+            .map_err(|e| format!("Failed to fetch replies: {}", e))?;
+        
+        let mut reply_vec: Vec<Event> = replies.into_iter().collect();
+        reply_vec.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        
+        Ok((parents, Some(target_event), reply_vec))
+    }
+    
+    /// Fetch notifications for the user (mentions, reactions, zaps, reposts)
+    pub async fn fetch_notifications(&self, user_pubkey: &PublicKey, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        // Mentions: text notes that tag this user
+        let mut mention_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .pubkey(*user_pubkey)
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            mention_filter = mention_filter.until(ts);
+        }
+        
+        // Reactions: kind 7 events that tag user's notes
+        let mut reaction_filter = Filter::new()
+            .kind(Kind::Reaction)
+            .pubkey(*user_pubkey)
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            reaction_filter = reaction_filter.until(ts);
+        }
+        
+        // Zaps: kind 9735 (zap receipt) that tag this user
+        let mut zap_filter = Filter::new()
+            .kind(Kind::ZapReceipt)
+            .pubkey(*user_pubkey)
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            zap_filter = zap_filter.until(ts);
+        }
+        
+        // Reposts of user's notes: kind 6 that tags user's notes
+        let mut repost_filter = Filter::new()
+            .kind(Kind::Repost)
+            .pubkey(*user_pubkey)
+            .limit(limit as usize);
+        
+        if let Some(ts) = until {
+            repost_filter = repost_filter.until(ts);
+        }
+        
+        // Fetch all in parallel
+        let (mentions, reactions, zaps, reposts) = tokio::join!(
+            self.client.fetch_events(mention_filter, DEFAULT_TIMEOUT),
+            self.client.fetch_events(reaction_filter, DEFAULT_TIMEOUT),
+            self.client.fetch_events(zap_filter, DEFAULT_TIMEOUT),
+            self.client.fetch_events(repost_filter, DEFAULT_TIMEOUT)
+        );
+        
+        let mut combined = Events::default();
+        
+        // Filter out self-interactions and add to combined
+        for events_result in [mentions, reactions, zaps, reposts] {
+            if let Ok(events) = events_result {
+                for event in events.into_iter() {
+                    // Skip events from the user themselves
+                    if event.pubkey != *user_pubkey {
+                        combined.insert(event);
+                    }
+                }
+            }
+        }
+        
+        tracing::info!("Fetched {} notifications", combined.len());
+        Ok(combined)
+    }
+    
+    /// Subscribe to new events (real-time updates)
+    pub async fn subscribe_feed(&self, following: &[PublicKey]) -> Result<(), String> {
+        // Build filter for text notes from following
+        let filter = Filter::new()
+            .kind(Kind::TextNote)
+            .authors(following.to_vec());
+        
+        self.client
+            .subscribe(filter, None)
+            .await
+            .map_err(|e| format!("Failed to subscribe: {}", e))?;
+        
+        Ok(())
+    }
+}
+
+/// Check if an event is a direct reply to another note
+/// We want to filter out actual replies but keep:
+/// - Quote posts (notes that embed/mention other notes)
+/// - Root posts with no reply context
+fn is_reply(event: &Event) -> bool {
+    // Check for explicit reply markers (NIP-10 compliant)
+    for tag in event.tags.iter() {
+        if let Some(TagStandard::Event { marker, .. }) = tag.as_standardized() {
+            // If it has a "reply" marker, it's definitely a reply
+            if let Some(m) = marker {
+                if *m == Marker::Reply || *m == Marker::Root {
+                    // But check if there's actual content beyond just the reply
+                    // Short content with just a reply tag = pure reply
+                    // Longer content = might be a quote post
+                    if event.content.len() < 50 {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    // For old-style (no marker), check if it looks like a reply context
+    // Old replies typically have e tag as first tag and short content
+    let e_tags: Vec<_> = event.tags.iter()
+        .filter(|tag| tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::E)))
+        .collect();
+    
+    // If there are e tags but also substantial content, treat as quote post
+    if !e_tags.is_empty() {
+        // Multiple e tags or short content = likely reply thread
+        // Single e tag with longer content = likely quote post
+        if e_tags.len() > 1 || event.content.len() < 100 {
+            // Check if content starts with mentioning someone (reply pattern)
+            if event.content.starts_with("@") || event.content.starts_with("nostr:npub") {
+                return true;
+            }
+            // If first tag is an 'e' tag (reply pattern from older clients)
+            if let Some(first_tag) = event.tags.first() {
+                if first_tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::E)) 
+                   && event.content.len() < 100 {
+                    return true;
+                }
+            }
+        }
+    }
+    
+    false
+}
+
+/// Thread-safe relay manager handle
+pub type SharedRelayManager = Arc<RwLock<Option<RelayManager>>>;
+
+/// Create a shared relay manager instance
+pub fn create_shared_relay_manager() -> SharedRelayManager {
+    Arc::new(RwLock::new(None))
+}

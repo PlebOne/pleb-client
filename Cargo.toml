@@ -14,11 +14,16 @@ cxx-qt = "0.7"
 cxx-qt-lib = { version = "0.7", features = ["qt_full"] }
 
 # Nostr libraries
-nostr = { version = "0.37", features = ["nip04", "nip44"] }
-nostr-sdk = "0.37"
+nostr = { version = "0.44", features = ["nip04", "nip44", "nip47"] }
+nostr-sdk = { version = "0.44", features = ["nip04", "nip44", "nip47"] }
+nostr-database = "0.44"
+nostrdb = "0.8"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+
+# D-Bus for Pleb Signer integration
+zbus = "5"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -34,10 +39,31 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
+urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
+lazy_static = "1.5"
+regex = "1.12"
+dirs = "5"
+parking_lot = "0.12"
 
 # Crypto
 rand = "0.8"
+
+# HTTP client for link previews and media uploads
+reqwest = { version = "0.12", features = ["json"] }
+
+# Secure credential storage
+keyring = "3"
+
+# Media upload (Blossom)
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+mime_guess = "2"
+
+# Password-based encryption for credential storage
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
 
 [build-dependencies]
 cxx-qt-build = "0.7"

@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Default Blossom server for media uploads
+pub const DEFAULT_BLOSSOM_SERVER: &str = "https://blossom.band";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub relays: Vec<String>,
@@ -11,14 +14,21 @@ pub struct Config {
     pub close_to_tray: bool,
     pub auto_load_images: bool,
     pub show_global_feed: bool,
+    #[serde(default = "default_blossom_server")]
+    pub blossom_server: String,
+}
+
+fn default_blossom_server() -> String {
+    DEFAULT_BLOSSOM_SERVER.to_string()
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             relays: vec![
-                "wss://relay.damus.io".to_string(),
+                "wss://relay.pleb.one".to_string(),
                 "wss://relay.primal.net".to_string(),
+                "wss://relay.damus.io".to_string(),
                 "wss://nos.lol".to_string(),
             ],
             public_key: None,
@@ -26,6 +36,7 @@ impl Default for Config {
             close_to_tray: true,
             auto_load_images: true,
             show_global_feed: true,
+            blossom_server: DEFAULT_BLOSSOM_SERVER.to_string(),
         }
     }
 }

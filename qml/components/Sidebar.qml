@@ -23,10 +23,17 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 12
             
-            Image {
-                source: "qrc:/icons/icon.png"
+            Rectangle {
                 Layout.preferredWidth: 40
                 Layout.preferredHeight: 40
+                radius: 8
+                color: "#9333ea"
+                
+                Text {
+                    anchors.centerIn: parent
+                    text: "⚡"
+                    font.pixelSize: 20
+                }
             }
             
             Text {
@@ -44,6 +51,7 @@ Rectangle {
         Repeater {
             model: [
                 { icon: "🏠", label: "Feed", screen: "feed" },
+                { icon: "🔍", label: "Search", screen: "search" },
                 { icon: "🔔", label: "Notifications", screen: "notifications" },
                 { icon: "✉️", label: "Messages", screen: "messages" },
                 { icon: "👤", label: "Profile", screen: "profile" },
