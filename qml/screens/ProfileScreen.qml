@@ -34,14 +34,36 @@ Rectangle {
         }
     }
     
-    // Load profile when pubkey changes
+    // Track if we need to reload when becoming visible
+    property bool needsReload: false
+    property string lastLoadedKey: ""
+    
+    // Load profile when pubkey changes, but only if visible
     onPublicKeyChanged: {
         if (publicKey.length > 0) {
-            // Set logged in user first for follow status checking
+            if (visible) {
+                // Set logged in user first for follow status checking
+                if (appController && appController.public_key) {
+                    profileController.set_logged_in_user(appController.public_key)
+                }
+                profileController.load_profile(publicKey)
+                lastLoadedKey = publicKey
+            } else {
+                // Defer loading until we become visible
+                needsReload = true
+            }
+        }
+    }
+    
+    // Load profile when we become visible if needed
+    onVisibleChanged: {
+        if (visible && needsReload && publicKey.length > 0 && publicKey !== lastLoadedKey) {
             if (appController && appController.public_key) {
                 profileController.set_logged_in_user(appController.public_key)
             }
             profileController.load_profile(publicKey)
+            lastLoadedKey = publicKey
+            needsReload = false
         }
     }
     

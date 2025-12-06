@@ -58,11 +58,14 @@ pub mod qobject {
         #[qsignal]
         fn error_occurred(self: Pin<&mut NotificationController>, error: &QString);
     }
+    
+    // Enable threading support for background work with UI updates
+    impl cxx_qt::Threading for NotificationController {}
 }
 
 use std::pin::Pin;
 use cxx_qt_lib::QString;
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use nostr_sdk::prelude::*;
 use crate::nostr::relay::RelayManager;
 use crate::nostr::profile::ProfileCache;
@@ -420,7 +423,7 @@ impl qobject::NotificationController {
         self.load_notifications();
     }
     
-    /// Load notifications
+    /// Load notifications (non-blocking with proper Qt threading)
     pub fn load_notifications(mut self: Pin<&mut Self>) {
         let user_pubkey = {
             let rust = self.as_ref();
@@ -434,9 +437,12 @@ impl qobject::NotificationController {
         
         self.as_mut().set_is_loading(true);
         
-        // Use thread::spawn().join() pattern like feed_bridge
-        let result = std::thread::spawn(move || {
-            NOTIFICATION_RUNTIME.block_on(async {
+        // Get qt_thread handle for UI updates
+        let qt_thread = self.qt_thread();
+        
+        // Spawn background thread - does NOT block the main thread
+        std::thread::spawn(move || {
+            let result = NOTIFICATION_RUNTIME.block_on(async {
                 // Create a temporary relay manager for fetching
                 let mut manager = create_authenticated_relay_manager();
                 manager.connect().await?;
@@ -477,43 +483,41 @@ impl qobject::NotificationController {
                 let oldest = notifications.last().map(|n| Timestamp::from(n.created_at as u64));
                 
                 Ok::<_, String>((notifications, profiles, oldest))
-            })
-        }).join();
-        
-        // Handle result
-        match result {
-            Ok(Ok((notifications, profiles, oldest))) => {
-                let count = notifications.len() as i32;
-                let unread = notifications.iter().filter(|n| !n.is_read).count() as i32;
-                {
-                    let mut rust = self.as_mut().rust_mut();
-                    rust.notifications = notifications;
-                    rust.profiles = profiles;
-                    rust.oldest_timestamp = oldest;
-                    rust.notification_count = count;
-                    rust.unread_count = unread;
+            });
+            
+            // Queue UI update back to Qt thread
+            match result {
+                Ok((notifications, profiles, oldest)) => {
+                    let count = notifications.len() as i32;
+                    let unread = notifications.iter().filter(|n| !n.is_read).count() as i32;
+                    let _ = qt_thread.queue(move |mut qobject| {
+                        {
+                            let mut rust = qobject.as_mut().rust_mut();
+                            rust.notifications = notifications;
+                            rust.profiles = profiles;
+                            rust.oldest_timestamp = oldest;
+                            rust.notification_count = count;
+                            rust.unread_count = unread;
+                        }
+                        qobject.as_mut().set_notification_count(count);
+                        qobject.as_mut().set_unread_count(unread);
+                        qobject.as_mut().set_is_loading(false);
+                        qobject.as_mut().set_error_message(QString::from(""));
+                        qobject.as_mut().notifications_updated();
+                        tracing::info!("Loaded {} notifications ({} unread)", count, unread);
+                    });
                 }
-                self.as_mut().set_notification_count(count);
-                self.as_mut().set_unread_count(unread);
-                self.as_mut().set_is_loading(false);
-                self.as_mut().set_error_message(QString::from(""));
-                self.as_mut().notifications_updated();
-                tracing::info!("Loaded {} notifications ({} unread)", count, unread);
+                Err(e) => {
+                    let error_msg = e.clone();
+                    let _ = qt_thread.queue(move |mut qobject| {
+                        tracing::error!("Failed to load notifications: {}", error_msg);
+                        qobject.as_mut().set_is_loading(false);
+                        qobject.as_mut().set_error_message(QString::from(&error_msg));
+                        qobject.as_mut().error_occurred(&QString::from(&error_msg));
+                    });
+                }
             }
-            Ok(Err(e)) => {
-                tracing::error!("Failed to load notifications: {}", e);
-                self.as_mut().set_is_loading(false);
-                self.as_mut().set_error_message(QString::from(&e));
-                self.as_mut().error_occurred(&QString::from(&e));
-            }
-            Err(_) => {
-                let err = "Thread panicked while loading notifications";
-                tracing::error!("{}", err);
-                self.as_mut().set_is_loading(false);
-                self.as_mut().set_error_message(QString::from(err));
-                self.as_mut().error_occurred(&QString::from(err));
-            }
-        }
+        });
     }
     
     /// Refresh (reload notifications)

@@ -177,12 +177,15 @@ pub mod qobject {
         #[qsignal]
         fn note_stats_ready(self: Pin<&mut FeedController>, note_id: &QString, stats_json: &QString);
     }
+    
+    // Enable threading support for background work with UI updates
+    impl cxx_qt::Threading for FeedController {}
 }
 
 use std::pin::Pin;
 use std::sync::Arc;
 use cxx_qt_lib::QString;
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use nostr_sdk::prelude::*;
 use tokio::sync::Mutex;
 use crate::nostr::{
@@ -348,8 +351,9 @@ impl qobject::FeedController {
         let pubkey_str = user_pubkey.to_string();
         tracing::info!("Initializing FeedController for user: {}", pubkey_str);
         
+        // Mark as loading and show initial status
         self.as_mut().set_is_loading(true);
-        self.as_mut().set_loading_status(QString::from("Connecting to relays..."));
+        self.as_mut().set_loading_status(QString::from("Initializing..."));
         
         // Store pubkey
         {
@@ -357,77 +361,203 @@ impl qobject::FeedController {
             rust.user_pubkey = Some(pubkey_str.clone());
         }
         
-        // Initialize database and relay manager
-        let init_result = FEED_RUNTIME.block_on(async {
-            // Initialize database singleton
-            if let Err(e) = NostrDbManager::global() {
-                tracing::error!("Failed to initialize database: {}", e);
-                // Continue anyway - we can work without local caching
-            } else {
-                tracing::info!("NostrDB initialized successfully");
+        // Get qt_thread handle for updating UI from background thread
+        let qt_thread = self.qt_thread();
+        
+        // Spawn background thread for initialization
+        std::thread::spawn(move || {
+            tracing::info!("Background init thread started");
+            
+            // Update status: Initializing database
+            let qt_thread_clone = qt_thread.clone();
+            let _ = qt_thread_clone.queue(|mut qobject| {
+                qobject.as_mut().set_loading_status(QString::from("Initializing database..."));
+            });
+            
+            // Initialize database (blocking is ok - we're in a background thread)
+            let db_result = FEED_RUNTIME.block_on(async {
+                if let Err(e) = NostrDbManager::global() {
+                    tracing::error!("Failed to initialize database: {}", e);
+                    // Continue anyway - we can work without local caching
+                } else {
+                    tracing::info!("NostrDB initialized successfully");
+                }
+                Ok::<(), String>(())
+            });
+            
+            if db_result.is_err() {
+                tracing::warn!("Database init had issues, continuing anyway");
             }
             
-            // Initialize relay manager - use keys if nsec is available for NIP-42 auth
-            let mut manager = {
-                let nsec_opt = FEED_NSEC.read().unwrap();
-                if let Some(nsec) = nsec_opt.as_ref() {
-                    if let Ok(secret_key) = SecretKey::parse(nsec) {
-                        let keys = Keys::new(secret_key);
-                        tracing::info!("Creating relay manager with signing keys for NIP-42 auth");
-                        RelayManager::with_keys(keys)
+            // Update status: Connecting to relays
+            let qt_thread_clone = qt_thread.clone();
+            let _ = qt_thread_clone.queue(|mut qobject| {
+                qobject.as_mut().set_loading_status(QString::from("Connecting to relays..."));
+            });
+            
+            // Initialize relay manager
+            let pubkey_for_relay = pubkey_str.clone();
+            let relay_result = FEED_RUNTIME.block_on(async {
+                // Initialize relay manager - use keys if nsec is available for NIP-42 auth
+                let mut manager = {
+                    let nsec_opt = FEED_NSEC.read().unwrap();
+                    if let Some(nsec) = nsec_opt.as_ref() {
+                        if let Ok(secret_key) = SecretKey::parse(nsec) {
+                            let keys = Keys::new(secret_key);
+                            tracing::info!("Creating relay manager with signing keys for NIP-42 auth");
+                            RelayManager::with_keys(keys)
+                        } else {
+                            tracing::warn!("Invalid nsec, creating relay manager without keys");
+                            RelayManager::new()
+                        }
                     } else {
-                        tracing::warn!("Invalid nsec, creating relay manager without keys");
+                        tracing::warn!("No nsec available, relay authentication may fail");
                         RelayManager::new()
                     }
-                } else {
-                    tracing::warn!("No nsec available, relay authentication may fail");
-                    RelayManager::new()
+                };
+                
+                // Set user pubkey and connect
+                if let Ok(pk) = PublicKey::parse(&pubkey_for_relay) {
+                    manager.set_user_pubkey(pk);
+                    
+                    // Connect to relays
+                    if let Err(e) = manager.connect().await {
+                        return Err(format!("Failed to connect to relays: {}", e));
+                    }
                 }
-            };
+                
+                // Store relay manager
+                let mut rm = RELAY_MANAGER.write().unwrap();
+                *rm = Some(manager);
+                
+                Ok(())
+            });
             
-            // Set user pubkey
-            if let Ok(pk) = PublicKey::parse(&pubkey_str) {
-                manager.set_user_pubkey(pk);
-                
-                // Connect to relays
-                if let Err(e) = manager.connect().await {
-                    return Err(format!("Failed to connect to relays: {}", e));
-                }
-                
-                // Fetch contact list
-                if let Err(e) = manager.fetch_contact_list(&pk).await {
-                    tracing::warn!("Failed to fetch contact list: {}", e);
-                    // Continue - user might not follow anyone yet
-                }
+            if let Err(e) = relay_result {
+                let error_msg = e.clone();
+                let _ = qt_thread.queue(move |mut qobject| {
+                    qobject.as_mut().set_error_message(QString::from(&error_msg));
+                    qobject.as_mut().set_is_loading(false);
+                    qobject.as_mut().set_loading_status(QString::from(""));
+                    qobject.as_mut().error_occurred(&QString::from(&error_msg));
+                });
+                return;
             }
             
-            // Store relay manager
-            let mut rm = RELAY_MANAGER.write().unwrap();
-            *rm = Some(manager);
+            // Update status: Fetching contact list
+            let qt_thread_clone = qt_thread.clone();
+            let _ = qt_thread_clone.queue(|mut qobject| {
+                qobject.as_mut().set_loading_status(QString::from("Fetching contact list..."));
+            });
             
-            Ok(())
+            // Fetch contact list (needs write access since it updates internal state)
+            let pubkey_for_contacts = pubkey_str.clone();
+            let _ = FEED_RUNTIME.block_on(async {
+                let mut rm = RELAY_MANAGER.write().unwrap();
+                if let Some(manager) = rm.as_mut() {
+                    if let Ok(pk) = PublicKey::parse(&pubkey_for_contacts) {
+                        if let Err(e) = manager.fetch_contact_list(&pk).await {
+                            tracing::warn!("Failed to fetch contact list: {}", e);
+                            // Continue - user might not follow anyone yet
+                        }
+                    }
+                }
+            });
+            
+            // Update status: Loading feed
+            let qt_thread_clone = qt_thread.clone();
+            let _ = qt_thread_clone.queue(|mut qobject| {
+                qobject.as_mut().set_loading_status(QString::from("Loading your feed..."));
+            });
+            
+            // Fetch the following feed
+            let feed_result = FEED_RUNTIME.block_on(async {
+                let rm = RELAY_MANAGER.read().unwrap();
+                let Some(manager) = rm.as_ref() else {
+                    return Err("Relay manager not initialized".to_string());
+                };
+                
+                let limit = 50u64;
+                let events = manager.fetch_following_feed(limit, None).await?;
+                
+                // Fetch profiles
+                let pubkeys: Vec<PublicKey> = events
+                    .iter()
+                    .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                let profiles = manager.fetch_profiles(&pubkeys).await.unwrap_or_default();
+                
+                let mut profile_map = std::collections::HashMap::new();
+                for profile_event in profiles.iter() {
+                    if let Ok(metadata) = Metadata::from_json(&profile_event.content) {
+                        let pubkey_hex = profile_event.pubkey.to_hex();
+                        profile_map.insert(pubkey_hex, ProfileCache::from_metadata(&metadata));
+                    }
+                }
+                
+                let mut notes: Vec<DisplayNote> = events
+                    .iter()
+                    .map(|e| {
+                        let pubkey_hex = e.pubkey.to_hex();
+                        let profile = profile_map.get(&pubkey_hex);
+                        DisplayNote::from_event(e, profile)
+                    })
+                    .collect();
+                
+                notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                Ok(notes)
+            });
+            
+            // Final UI update
+            match feed_result {
+                Ok(notes) => {
+                    // Cache the results
+                    if let Ok(mut cache) = FEED_CACHE.write() {
+                        cache.insert("following".to_string(), notes.clone());
+                    }
+                    
+                    let count = notes.len() as i32;
+                    let _ = qt_thread.queue(move |mut qobject| {
+                        {
+                            let mut rust = qobject.as_mut().rust_mut();
+                            rust.notes = notes;
+                            rust.note_count = count;
+                            rust.initialized = true;
+                        }
+                        qobject.as_mut().set_note_count(count);
+                        qobject.as_mut().set_current_feed(QString::from("following"));
+                        qobject.as_mut().set_is_loading(false);
+                        qobject.as_mut().set_loading_status(QString::from(""));
+                        qobject.as_mut().set_error_message(QString::from(""));
+                        qobject.as_mut().loading_changed(false);
+                        qobject.as_mut().feed_updated();
+                        
+                        tracing::info!("FeedController initialized with {} notes", count);
+                    });
+                    
+                    // Prefetch other feeds in background
+                    prefetch_feed(FeedType::Replies);
+                    prefetch_feed(FeedType::Global);
+                }
+                Err(e) => {
+                    let error_msg = e.clone();
+                    let _ = qt_thread.queue(move |mut qobject| {
+                        {
+                            let mut rust = qobject.as_mut().rust_mut();
+                            rust.initialized = true; // Mark as initialized even on error
+                        }
+                        qobject.as_mut().set_error_message(QString::from(&error_msg));
+                        qobject.as_mut().set_is_loading(false);
+                        qobject.as_mut().set_loading_status(QString::from(""));
+                        qobject.as_mut().loading_changed(false);
+                        qobject.as_mut().error_occurred(&QString::from(&error_msg));
+                    });
+                }
+            }
         });
-        
-        match init_result {
-            Ok(()) => {
-                {
-                    let mut rust = self.as_mut().rust_mut();
-                    rust.initialized = true;
-                }
-                self.as_mut().set_is_loading(false);
-                tracing::info!("FeedController initialized successfully");
-                
-                // Prefetch other feeds in the background
-                // Following feed will be loaded immediately after init
-                prefetch_feed(FeedType::Replies);
-                prefetch_feed(FeedType::Global);
-            }
-            Err(e) => {
-                self.as_mut().set_error_message(QString::from(&e));
-                self.as_mut().set_is_loading(false);
-                self.as_mut().error_occurred(&QString::from(&e));
-            }
-        }
     }
     
     /// Load a feed type
@@ -460,112 +590,106 @@ impl qobject::FeedController {
             }
         }
         
-        // No cache - load from network
+        // No cache - load from network in background thread
         self.as_mut().set_is_loading(true);
-        self.as_mut().set_loading_status(QString::from("Fetching notes..."));
+        let status_msg = format!("Loading {} feed...", feed_type_str);
+        self.as_mut().set_loading_status(QString::from(&status_msg));
         self.as_mut().loading_changed(true);
         
         let feed = FeedType::from_str(&feed_type_str);
+        let qt_thread = self.qt_thread();
+        let feed_type_for_thread = feed_type_str.clone();
         
-        let result = FEED_RUNTIME.block_on(async {
-            let rm = RELAY_MANAGER.read().unwrap();
-            let Some(manager) = rm.as_ref() else {
-                return Err("Relay manager not initialized. Please log in first.".to_string());
-            };
+        // Spawn background thread for feed loading
+        std::thread::spawn(move || {
+            let result = FEED_RUNTIME.block_on(async {
+                let rm = RELAY_MANAGER.read().unwrap();
+                let Some(manager) = rm.as_ref() else {
+                    return Err("Relay manager not initialized. Please log in first.".to_string());
+                };
+                
+                // Fetch feed based on type
+                let limit = 50u64;
+                let events = match feed {
+                    FeedType::Following => manager.fetch_following_feed(limit, None).await?,
+                    FeedType::Replies => manager.fetch_home_feed(limit, None).await?,
+                    FeedType::Global => manager.fetch_global_feed(limit, None).await?,
+                };
+                
+                // Collect unique pubkeys for profile fetching
+                let pubkeys: Vec<PublicKey> = events
+                    .iter()
+                    .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                // Fetch profiles
+                let profiles = manager.fetch_profiles(&pubkeys).await.unwrap_or_default();
+                
+                // Parse profiles into cache
+                let mut profile_map = std::collections::HashMap::new();
+                for profile_event in profiles.iter() {
+                    if let Ok(metadata) = Metadata::from_json(&profile_event.content) {
+                        let pubkey_hex = profile_event.pubkey.to_hex();
+                        profile_map.insert(pubkey_hex, ProfileCache::from_metadata(&metadata));
+                    }
+                }
+                
+                // Convert to display notes
+                let notes: Vec<DisplayNote> = events
+                    .iter()
+                    .map(|e| {
+                        let pubkey_hex = e.pubkey.to_hex();
+                        let profile = profile_map.get(&pubkey_hex);
+                        DisplayNote::from_event(e, profile)
+                    })
+                    .collect();
+                
+                Ok(notes)
+            });
             
-            // Fetch feed based on type
-            let limit = 50u64;
-            let events = match feed {
-                FeedType::Following => manager.fetch_following_feed(limit, None).await?,
-                FeedType::Replies => manager.fetch_home_feed(limit, None).await?,
-                FeedType::Global => manager.fetch_global_feed(limit, None).await?,
-            };
-            
-            // Collect unique pubkeys for profile fetching
-            let pubkeys: Vec<PublicKey> = events
-                .iter()
-                .map(|e| e.pubkey)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            
-            // Fetch profiles
-            let profiles = manager.fetch_profiles(&pubkeys).await.unwrap_or_default();
-            
-            // Parse profiles into cache
-            let mut profile_map = std::collections::HashMap::new();
-            for profile_event in profiles.iter() {
-                if let Ok(metadata) = Metadata::from_json(&profile_event.content) {
-                    let pubkey_hex = profile_event.pubkey.to_hex();
-                    profile_map.insert(pubkey_hex, ProfileCache::from_metadata(&metadata));
+            match result {
+                Ok(mut notes) => {
+                    // Sort by timestamp descending
+                    notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    
+                    // Cache the results
+                    if let Ok(mut cache) = FEED_CACHE.write() {
+                        cache.insert(feed_type_for_thread.clone(), notes.clone());
+                    }
+                    
+                    let count = notes.len() as i32;
+                    let feed_name = feed_type_for_thread.clone();
+                    let _ = qt_thread.queue(move |mut qobject| {
+                        {
+                            let mut rust = qobject.as_mut().rust_mut();
+                            rust.notes = notes;
+                            rust.note_count = count;
+                        }
+                        qobject.as_mut().set_note_count(count);
+                        qobject.as_mut().set_is_loading(false);
+                        qobject.as_mut().set_loading_status(QString::from(""));
+                        qobject.as_mut().set_error_message(QString::from(""));
+                        qobject.as_mut().loading_changed(false);
+                        qobject.as_mut().feed_updated();
+                        
+                        tracing::info!("Loaded {} notes for {} feed", count, feed_name);
+                    });
+                }
+                Err(e) => {
+                    let error_msg = e.clone();
+                    let _ = qt_thread.queue(move |mut qobject| {
+                        tracing::error!("Failed to load feed: {}", error_msg);
+                        qobject.as_mut().set_error_message(QString::from(&error_msg));
+                        qobject.as_mut().set_is_loading(false);
+                        qobject.as_mut().set_loading_status(QString::from(""));
+                        qobject.as_mut().loading_changed(false);
+                        qobject.as_mut().error_occurred(&QString::from(&error_msg));
+                    });
                 }
             }
-            
-            // Store in nostrdb cache using the global singleton
-            // TEMPORARILY DISABLED - nostrdb causing segfaults
-            // if let Ok(db) = NostrDbManager::global() {
-            //     // Ingest events in batch
-            //     let event_vec: Vec<Event> = events.iter().cloned().collect();
-            //     match db.ingest_events(&event_vec) {
-            //         Ok(count) => tracing::debug!("Cached {} new events", count),
-            //         Err(e) => tracing::warn!("Failed to cache events: {}", e),
-            //     }
-            //     
-            //     // Ingest profiles in batch
-            //     let profile_vec: Vec<Event> = profiles.iter().cloned().collect();
-            //     match db.ingest_profiles(&profile_vec) {
-            //         Ok(count) => tracing::debug!("Cached {} profiles", count),
-            //         Err(e) => tracing::warn!("Failed to cache profiles: {}", e),
-            //     }
-            // }
-            
-            // Convert to display notes
-            let notes: Vec<DisplayNote> = events
-                .iter()
-                .map(|e| {
-                    let pubkey_hex = e.pubkey.to_hex();
-                    let profile = profile_map.get(&pubkey_hex);
-                    DisplayNote::from_event(e, profile)
-                })
-                .collect();
-            
-            Ok(notes)
         });
-        
-        match result {
-            Ok(mut notes) => {
-                // Sort by timestamp descending
-                notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                
-                // Cache the results
-                if let Ok(mut cache) = FEED_CACHE.write() {
-                    cache.insert(feed_type_str.clone(), notes.clone());
-                }
-                
-                let count = notes.len() as i32;
-                {
-                    let mut rust = self.as_mut().rust_mut();
-                    rust.notes = notes;
-                    rust.note_count = count;
-                }
-                self.as_mut().set_note_count(count);
-                self.as_mut().set_is_loading(false);
-                self.as_mut().set_loading_status(QString::from(""));
-                self.as_mut().set_error_message(QString::from(""));
-                self.as_mut().loading_changed(false);
-                self.as_mut().feed_updated();
-                
-                tracing::info!("Loaded {} notes for {} feed", count, feed_type_str);
-            }
-            Err(e) => {
-                tracing::error!("Failed to load feed: {}", e);
-                self.as_mut().set_error_message(QString::from(&e));
-                self.as_mut().set_is_loading(false);
-                self.as_mut().set_loading_status(QString::from(""));
-                self.as_mut().loading_changed(false);
-                self.as_mut().error_occurred(&QString::from(&e));
-            }
-        }
     }
     
     /// Load more notes (pagination) - fetch older notes

@@ -21,6 +21,7 @@ pub mod qobject {
         #[qproperty(QString, profile_picture)]
         #[qproperty(bool, is_loading)]
         #[qproperty(QString, error_message)]
+        #[qproperty(QString, loading_status_text)]
         #[qproperty(bool, tray_available)]
         #[qproperty(bool, signer_available)]
         #[qproperty(i64, wallet_balance_sats)]
@@ -143,6 +144,10 @@ pub mod qobject {
         /// Emitted when credentials are saved successfully
         #[qsignal]
         fn credentials_saved(self: Pin<&mut AppController>);
+        
+        /// Emitted when loading status text changes
+        #[qsignal]
+        fn loading_status_changed(self: Pin<&mut AppController>, status: &QString);
     }
 }
 
@@ -172,6 +177,7 @@ pub struct AppControllerRust {
     profile_picture: QString,
     is_loading: bool,
     error_message: QString,
+    loading_status_text: QString,
     tray_available: bool,
     signer_available: bool,
     wallet_balance_sats: i64,
@@ -199,6 +205,7 @@ impl Default for AppControllerRust {
             profile_picture: QString::from(""),
             is_loading: false,
             error_message: QString::from(""),
+            loading_status_text: QString::from(""),
             tray_available: false,
             signer_available: false,
             wallet_balance_sats: 0,
@@ -371,12 +378,17 @@ impl qobject::AppController {
         
         self.as_mut().set_is_loading(true);
         self.as_mut().set_error_message(QString::from(""));
+        self.as_mut().set_loading_status_text(QString::from("Decrypting credentials..."));
+        self.as_mut().loading_status_changed(&QString::from("Decrypting credentials..."));
         
         match CredentialManager::new() {
             Ok(creds) => {
                 match creds.get_nsec(&password_str) {
                     Ok(Some(nsec)) => {
                         tracing::info!("Successfully decrypted credentials");
+                        self.as_mut().set_loading_status_text(QString::from("Credentials decrypted, logging in..."));
+                        self.as_mut().loading_status_changed(&QString::from("Credentials decrypted, logging in..."));
+                        
                         // Use the nsec to complete login
                         match parse_nsec(&nsec) {
                             Ok((_secret_key, pubkey, npub)) => {
@@ -386,9 +398,11 @@ impl qobject::AppController {
                                 self.as_mut().set_public_key(QString::from(&pubkey));
                                 self.as_mut().set_npub(QString::from(&npub));
                                 self.as_mut().set_logged_in(true);
-                                self.as_mut().set_current_screen(QString::from("feed"));
+                                // Don't switch to feed screen yet - let feed loading complete first
                                 self.as_mut().set_display_name(QString::from("Anonymous"));
-                                self.as_mut().set_is_loading(false);
+                                self.as_mut().set_loading_status_text(QString::from("Loading your feed..."));
+                                self.as_mut().loading_status_changed(&QString::from("Loading your feed..."));
+                                // Keep is_loading true - will be set false after feed loads
                                 self.as_mut().login_complete(true, &QString::from(""));
                                 tracing::info!("Login with password successful: {}", npub);
                                 
@@ -427,6 +441,7 @@ impl qobject::AppController {
                             Err(e) => {
                                 self.as_mut().set_error_message(QString::from(&e));
                                 self.as_mut().set_is_loading(false);
+                                self.as_mut().set_loading_status_text(QString::from(""));
                                 self.as_mut().login_complete(false, &QString::from(&e));
                             }
                         }
@@ -435,12 +450,14 @@ impl qobject::AppController {
                         let err = "No saved credentials found";
                         self.as_mut().set_error_message(QString::from(err));
                         self.as_mut().set_is_loading(false);
+                        self.as_mut().set_loading_status_text(QString::from(""));
                         self.as_mut().login_complete(false, &QString::from(err));
                     }
                     Err(e) => {
                         // Most likely wrong password
                         self.as_mut().set_error_message(QString::from(&e));
                         self.as_mut().set_is_loading(false);
+                        self.as_mut().set_loading_status_text(QString::from(""));
                         self.as_mut().login_complete(false, &QString::from(&e));
                         tracing::warn!("Failed to decrypt credentials: {}", e);
                     }
@@ -449,6 +466,7 @@ impl qobject::AppController {
             Err(e) => {
                 self.as_mut().set_error_message(QString::from(&e));
                 self.as_mut().set_is_loading(false);
+                self.as_mut().set_loading_status_text(QString::from(""));
                 self.as_mut().login_complete(false, &QString::from(&e));
             }
         }

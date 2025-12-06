@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
+import Qt.labs.platform as Platform
 
 // Compose Dialog - Popup for creating new posts
 Popup {
@@ -367,108 +369,23 @@ Popup {
         }
     }
     
-    // File input dialog
-    Popup {
+    // File picker dialog
+    FileDialog {
         id: fileInputDialog
-        anchors.centerIn: parent
-        width: 400
-        height: 200
-        modal: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        title: "Select Image or Video"
+        nameFilters: ["Images (*.jpg *.jpeg *.png *.gif *.webp)", "Videos (*.mp4 *.webm *.mov)", "All supported (*.jpg *.jpeg *.png *.gif *.webp *.mp4 *.webm *.mov)"]
+        selectedNameFilter.index: 2
         
-        background: Rectangle {
-            color: "#1a1a1a"
-            radius: 12
-            border.color: "#333333"
-            border.width: 1
-        }
-        
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 12
-            
-            Text {
-                text: "Enter file path"
-                color: "#ffffff"
-                font.pixelSize: 16
-                font.weight: Font.Bold
+        onAccepted: {
+            var path = selectedFile.toString()
+            // Remove file:// prefix for local files
+            if (path.startsWith("file://")) {
+                path = path.substring(7)
             }
-            
-            Text {
-                text: "Supported: JPG, PNG, GIF, WebP, MP4, WebM"
-                color: "#888888"
-                font.pixelSize: 12
-            }
-            
-            TextField {
-                id: filePathInput
-                Layout.fillWidth: true
-                placeholderText: "/path/to/image.jpg"
-                color: "#ffffff"
-                font.pixelSize: 14
-                
-                background: Rectangle {
-                    color: "#0a0a0a"
-                    radius: 8
-                    border.color: filePathInput.activeFocus ? "#9333ea" : "#333333"
-                    border.width: 1
-                }
-            }
-            
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 12
-                
-                Item { Layout.fillWidth: true }
-                
-                Button {
-                    text: "Cancel"
-                    implicitWidth: 80
-                    
-                    background: Rectangle {
-                        color: parent.pressed ? "#333333" : "#252525"
-                        radius: 8
-                    }
-                    
-                    contentItem: Text {
-                        text: parent.text
-                        color: "#ffffff"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    
-                    onClicked: fileInputDialog.close()
-                }
-                
-                Button {
-                    text: "Add"
-                    implicitWidth: 80
-                    enabled: filePathInput.text.trim() !== ""
-                    
-                    background: Rectangle {
-                        color: parent.enabled ? (parent.pressed ? "#7c22c9" : "#9333ea") : "#333333"
-                        radius: 8
-                    }
-                    
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.enabled ? "#ffffff" : "#666666"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    
-                    onClicked: {
-                        var path = filePathInput.text.trim()
-                        if (path) {
-                            // Upload to Blossom
-                            root.isUploading = true
-                            root.feedController.upload_media(path)
-                        }
-                        fileInputDialog.close()
-                        filePathInput.text = ""
-                    }
-                }
+            if (path) {
+                // Upload to Blossom
+                root.isUploading = true
+                root.feedController.upload_media(path)
             }
         }
     }

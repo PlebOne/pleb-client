@@ -13,6 +13,7 @@ Rectangle {
     property string generatedNsec: ""
     property string generatedNpub: ""
     property bool hasSavedCredentials: false
+    property string loadingStatusText: ""  // Loading status message
     
     // Current view: "main", "create", "import", "advanced", "unlock"
     property string currentView: hasSavedCredentials ? "unlock" : "main"
@@ -193,6 +194,25 @@ Rectangle {
                                 if (unlockPasswordInput.text.trim() !== "") {
                                     root.passwordLoginRequested(unlockPasswordInput.text.trim())
                                 }
+                            }
+                        }
+                        
+                        // Loading status text
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.loadingStatusText
+                            color: "#9333ea"
+                            font.pixelSize: 13
+                            horizontalAlignment: Text.AlignHCenter
+                            visible: root.loadingStatusText !== ""
+                            wrapMode: Text.WordWrap
+                            
+                            // Subtle pulsing animation when loading
+                            SequentialAnimation on opacity {
+                                running: root.loadingStatusText !== ""
+                                loops: Animation.Infinite
+                                NumberAnimation { from: 1.0; to: 0.5; duration: 800; easing.type: Easing.InOutSine }
+                                NumberAnimation { from: 0.5; to: 1.0; duration: 800; easing.type: Easing.InOutSine }
                             }
                         }
                         

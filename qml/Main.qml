@@ -98,14 +98,35 @@ ApplicationWindow {
         
         onLogin_complete: function(success, error) {
             if (success && public_key.toString() !== "") {
-                // Initialize feed and load following feed (only called once)
+                // Update loading status for user feedback
+                appController.loading_status_text = "Initializing..."
+                
+                // Initialize feed controller (it now loads the feed internally with proper threading)
                 console.log("[DEBUG] Initializing feed controller for:", public_key)
                 feedController.initialize(public_key)
-                feedController.load_feed("following")
+                // Note: Don't call load_feed here - initialize() now does it with proper async
                 
                 // Initialize notification controller
                 console.log("[DEBUG] Initializing notification controller for:", public_key)
                 notificationController.initialize(public_key)
+            }
+        }
+    }
+    
+    // Forward feedController loading_status to appController for login screen display
+    Connections {
+        target: feedController
+        function onLoading_statusChanged() {
+            appController.loading_status_text = feedController.loading_status
+        }
+        
+        // When feed is loaded successfully, navigate to feed screen and clear status
+        function onFeed_updated() {
+            console.log("[DEBUG] Feed updated, navigating to feed screen")
+            appController.loading_status_text = ""
+            appController.is_loading = false
+            if (appController.current_screen === "login") {
+                appController.navigate_to("feed")
             }
         }
     }
@@ -220,6 +241,7 @@ ApplicationWindow {
                 isLoading: appController.is_loading
                 errorMessage: appController.error_message
                 hasSavedCredentials: appController.has_saved_credentials
+                loadingStatusText: appController.loading_status_text
                 
                 onLoginRequested: function(nsec) {
                     console.log("Login requested with nsec")
