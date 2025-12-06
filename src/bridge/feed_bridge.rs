@@ -176,6 +176,11 @@ pub mod qobject {
         /// stats_json contains: {reactions: {emoji: count}, zapAmount: sats, zapCount: number}
         #[qsignal]
         fn note_stats_ready(self: Pin<&mut FeedController>, note_id: &QString, stats_json: &QString);
+        
+        /// Emitted when user's own profile is loaded
+        /// Contains display_name and picture URL
+        #[qsignal]
+        fn user_profile_loaded(self: Pin<&mut FeedController>, display_name: &QString, picture: &QString);
     }
     
     // Enable threading support for background work with UI updates
@@ -463,6 +468,41 @@ impl qobject::FeedController {
                     }
                 }
             });
+            
+            // Fetch user's own profile
+            let qt_thread_clone = qt_thread.clone();
+            let _ = qt_thread_clone.queue(|mut qobject| {
+                qobject.as_mut().set_loading_status(QString::from("Fetching your profile..."));
+            });
+            
+            let pubkey_for_profile = pubkey_str.clone();
+            let user_profile_result = FEED_RUNTIME.block_on(async {
+                let rm = RELAY_MANAGER.read().unwrap();
+                if let Some(manager) = rm.as_ref() {
+                    if let Ok(pk) = PublicKey::parse(&pubkey_for_profile) {
+                        let profiles = manager.fetch_profiles(&[pk]).await.unwrap_or_default();
+                        if let Some(profile_event) = profiles.first() {
+                            if let Ok(metadata) = Metadata::from_json(&profile_event.content) {
+                                let display_name = metadata.display_name
+                                    .or(metadata.name)
+                                    .unwrap_or_default();
+                                let picture = metadata.picture.unwrap_or_default();
+                                return Ok((display_name, picture));
+                            }
+                        }
+                    }
+                }
+                Ok::<_, String>((String::new(), String::new()))
+            });
+            
+            // Send user profile to QML
+            if let Ok((display_name, picture)) = user_profile_result {
+                let qt_thread_clone = qt_thread.clone();
+                let _ = qt_thread_clone.queue(move |mut qobject| {
+                    qobject.as_mut().user_profile_loaded(&QString::from(&display_name), &QString::from(&picture));
+                    tracing::info!("User profile loaded: {} (picture: {})", display_name, !picture.is_empty());
+                });
+            }
             
             // Update status: Loading feed
             let qt_thread_clone = qt_thread.clone();

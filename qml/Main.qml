@@ -129,6 +129,13 @@ ApplicationWindow {
                 appController.navigate_to("feed")
             }
         }
+        
+        // When user's profile is loaded, update appController
+        function onUser_profile_loaded(display_name, picture) {
+            console.log("[DEBUG] User profile loaded:", display_name, picture ? "has picture" : "no picture")
+            appController.display_name = display_name || "Anonymous"
+            appController.profile_picture = picture || ""
+        }
     }
     
     // Helper function to map screen name to index
