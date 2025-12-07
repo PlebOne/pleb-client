@@ -149,12 +149,16 @@ ApplicationWindow {
             case "profile": return 5
             case "settings": return 6
             case "search": return 7
+            case "relays": return 8
             default: return 0
         }
     }
     
     // Track the note to show in thread view
     property string threadNoteId: ""
+    
+    // Track the profile pubkey to view (if different from logged-in user)
+    property string viewingProfilePubkey: ""
     
     // Track the previous screen for back navigation
     property string previousScreen: "feed"
@@ -217,6 +221,10 @@ ApplicationWindow {
             walletBalance: appController.wallet_balance_sats
             
             onNavigate: function(screen) {
+                // Clear viewing profile pubkey when navigating to own profile via sidebar
+                if (screen === "profile") {
+                    window.viewingProfilePubkey = ""
+                }
                 appController.navigate_to(screen)
             }
         }
@@ -302,6 +310,13 @@ ApplicationWindow {
                     window.threadNoteId = noteId
                     appController.navigate_to("thread")
                 }
+                
+                onOpenProfile: function(pubkey) {
+                    console.log("Opening profile for:", pubkey)
+                    window.previousScreen = "feed"
+                    window.viewingProfilePubkey = pubkey
+                    appController.navigate_to("profile")
+                }
             }
             
             // Thread screen
@@ -311,6 +326,13 @@ ApplicationWindow {
                 
                 onBack: {
                     appController.navigate_to(window.previousScreen)
+                }
+                
+                onOpenProfile: function(pubkey) {
+                    console.log("Opening profile from thread:", pubkey)
+                    window.previousScreen = "thread"
+                    window.viewingProfilePubkey = pubkey
+                    appController.navigate_to("profile")
                 }
             }
             
@@ -324,6 +346,13 @@ ApplicationWindow {
                     window.threadNoteId = noteId
                     appController.navigate_to("thread")
                 }
+                
+                onOpenProfile: function(pubkey) {
+                    console.log("[DEBUG] Opening profile from notification:", pubkey)
+                    window.previousScreen = "notifications"
+                    window.viewingProfilePubkey = pubkey
+                    appController.navigate_to("profile")
+                }
             }
             
             // DM screen
@@ -334,9 +363,21 @@ ApplicationWindow {
             
             // Profile screen
             ProfileScreen {
-                publicKey: appController.public_key
+                id: profileScreen
+                // Use viewing profile pubkey if set, otherwise use logged-in user's pubkey
+                publicKey: window.viewingProfilePubkey || appController.public_key
                 displayName: appController.display_name
                 appController: appController
+                
+                // Show back button when viewing other profiles
+                isOtherProfile: window.viewingProfilePubkey !== "" && 
+                                window.viewingProfilePubkey !== appController.public_key
+                
+                onBack: {
+                    // Clear viewing profile and go back
+                    window.viewingProfilePubkey = ""
+                    appController.navigate_to(window.previousScreen)
+                }
             }
             
             // Settings screen
@@ -365,7 +406,9 @@ ApplicationWindow {
                 
                 onOpenProfile: function(pubkey) {
                     console.log("[DEBUG] Opening profile from search:", pubkey)
-                    // TODO: Navigate to profile with pubkey
+                    window.previousScreen = "search"
+                    window.viewingProfilePubkey = pubkey
+                    appController.navigate_to("profile")
                 }
                 
                 onOpenThread: function(noteId) {
@@ -374,6 +417,11 @@ ApplicationWindow {
                     window.threadNoteId = noteId
                     appController.navigate_to("thread")
                 }
+            }
+            
+            // Relays screen
+            RelaysScreen {
+                appController: appController
             }
         }
     }

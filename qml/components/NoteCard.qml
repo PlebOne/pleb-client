@@ -13,6 +13,7 @@ Rectangle {
     antialiasing: false   // Disable antialiasing for rectangles
     
     property string noteId: ""
+    property string authorPubkey: ""
     property string authorName: ""
     property string authorPicture: ""
     property string authorNip05: ""
@@ -43,6 +44,7 @@ Rectangle {
     signal replyClicked()
     signal zapClicked()
     signal noteClicked(string noteId)
+    signal authorClicked(string pubkey)
     
     // Async stats fetching - non-blocking
     onNoteIdChanged: {
@@ -185,12 +187,22 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 12
             
-            // Avatar
+            // Avatar - clickable
             ProfileAvatar {
                 Layout.preferredWidth: 48
                 Layout.preferredHeight: 48
                 name: authorName
                 imageUrl: authorPicture
+                
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (root.authorPubkey) {
+                            root.authorClicked(root.authorPubkey)
+                        }
+                    }
+                }
             }
             
             ColumnLayout {
@@ -201,12 +213,25 @@ Rectangle {
                     spacing: 6
                     
                     Text {
+                        id: authorNameText
                         text: authorName
-                        color: "#ffffff"
+                        color: authorNameMouseArea.containsMouse ? "#9333ea" : "#ffffff"
                         font.pixelSize: 15
                         font.weight: Font.Medium
                         elide: Text.ElideRight
                         Layout.maximumWidth: 200
+                        
+                        MouseArea {
+                            id: authorNameMouseArea
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            hoverEnabled: true
+                            onClicked: {
+                                if (root.authorPubkey) {
+                                    root.authorClicked(root.authorPubkey)
+                                }
+                            }
+                        }
                     }
                     
                     // NIP-05 verification badge

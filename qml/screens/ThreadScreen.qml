@@ -12,6 +12,7 @@ Rectangle {
     property string noteId: ""
     
     signal back()
+    signal openProfile(string pubkey)
     
     // Keyboard navigation
     Keys.onPressed: function(event) {
@@ -227,6 +228,7 @@ Rectangle {
                     border.width: delegateItem.isTarget ? 2 : 0
                     
                     noteId: delegateItem.noteData.id || ""
+                    authorPubkey: delegateItem.noteData.pubkey || ""
                     authorName: delegateItem.noteData.authorName || "Unknown"
                     authorPicture: delegateItem.noteData.authorPicture || ""
                     authorNip05: delegateItem.noteData.authorNip05 || ""
@@ -262,6 +264,10 @@ Rectangle {
                         if (id !== root.noteId) {
                             root.noteId = id
                         }
+                    }
+                    onAuthorClicked: function(pubkey) {
+                        console.log("Opening profile from thread:", pubkey)
+                        root.openProfile(pubkey)
                     }
                 }
             }

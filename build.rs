@@ -37,6 +37,7 @@ fn main() {
                 "qml/screens/DmScreen.qml",
                 "qml/screens/NotificationsScreen.qml",
                 "qml/screens/SearchScreen.qml",
+                "qml/screens/RelaysScreen.qml",
             ],
             ..Default::default()
         })

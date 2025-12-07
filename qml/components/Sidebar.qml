@@ -51,6 +51,7 @@ Rectangle {
                 { icon: "🔔", label: "Notifications", screen: "notifications" },
                 { icon: "✉️", label: "Messages", screen: "messages" },
                 { icon: "👤", label: "Profile", screen: "profile" },
+                { icon: "📡", label: "Relays", screen: "relays" },
                 { icon: "⚙️", label: "Settings", screen: "settings" }
             ]
             
@@ -171,20 +172,14 @@ Rectangle {
                     Image {
                         id: sidebarProfileImage
                         anchors.fill: parent
-                        source: profilePicture
-                        visible: profilePicture !== "" && status === Image.Ready
+                        source: profilePicture || ""
+                        visible: (profilePicture || "").length > 0 && status === Image.Ready
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         cache: true
-                        
-                        // Rounded clipping
+                        sourceSize.width: 88
+                        sourceSize.height: 88
                         layer.enabled: true
-                        layer.effect: Item {
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 22
-                            }
-                        }
                         
                         onStatusChanged: {
                             if (status === Image.Error) {
@@ -193,13 +188,21 @@ Rectangle {
                         }
                     }
                     
+                    // Loading indicator
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 22
+                        color: "#2a2a2a"
+                        visible: (profilePicture || "").length > 0 && sidebarProfileImage.status === Image.Loading
+                    }
+                    
                     Text {
                         anchors.centerIn: parent
                         text: displayName ? displayName.charAt(0).toUpperCase() : "?"
                         color: "#ffffff"
                         font.pixelSize: 18
                         font.weight: Font.Bold
-                        visible: sidebarProfileImage.status !== Image.Ready
+                        visible: sidebarProfileImage.status !== Image.Ready && sidebarProfileImage.status !== Image.Loading
                     }
                 }
                 

@@ -21,6 +21,7 @@ nostrdb = "0.8"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 
 # D-Bus for Pleb Signer integration
 zbus = "5"

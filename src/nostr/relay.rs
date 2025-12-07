@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use nostr_sdk::prelude::*;
 use std::sync::RwLock;
+use futures::future::join_all;
 
 /// Default relays for initial connection
 pub const DEFAULT_RELAYS: &[&str] = &[
@@ -11,6 +12,14 @@ pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.primal.net",
     "wss://relay.damus.io",
     "wss://nos.lol",
+];
+
+/// Discovery relays for NIP-65 relay list lookups (outbox model)
+/// These relays are used to find users' relay preferences
+pub const DISCOVERY_RELAYS: &[&str] = &[
+    "wss://purplepag.es",
+    "wss://relay.nos.social",
+    "wss://relay.nostr.band",
 ];
 
 /// Default timeout for relay operations
@@ -28,6 +37,7 @@ impl RelayManager {
     /// Create a new relay manager
     pub fn new() -> Self {
         let client = Client::default();
+        
         Self {
             client,
             connected: false,
@@ -39,6 +49,7 @@ impl RelayManager {
     /// Create relay manager with a signer (for posting)
     pub fn with_keys(keys: Keys) -> Self {
         let client = Client::new(keys);
+        
         Self {
             client,
             connected: false,
@@ -71,9 +82,19 @@ impl RelayManager {
     pub async fn connect(&mut self) -> Result<(), String> {
         tracing::info!("Connecting to {} default relays...", DEFAULT_RELAYS.len());
         
+        // Add default read/write relays
         for relay_url in DEFAULT_RELAYS {
             if let Err(e) = self.client.add_relay(*relay_url).await {
                 tracing::warn!("Failed to add relay {}: {}", relay_url, e);
+            }
+        }
+        
+        // Add discovery relays for NIP-65 lookups (outbox model)
+        // These help us find users' preferred relays
+        tracing::info!("Adding {} discovery relays for NIP-65 lookups...", DISCOVERY_RELAYS.len());
+        for relay_url in DISCOVERY_RELAYS {
+            if let Err(e) = self.client.add_relay(*relay_url).await {
+                tracing::warn!("Failed to add discovery relay {}: {}", relay_url, e);
             }
         }
         
@@ -349,12 +370,34 @@ impl RelayManager {
             })
             .collect();
         
-        // Fetch parent events
-        let mut parents = Vec::new();
-        for parent_id in &parent_ids {
-            if let Ok(Some(parent)) = self.fetch_event(parent_id).await {
-                // Get grandparent IDs before moving parent
-                let grandparent_ids: Vec<EventId> = parent.tags.iter()
+        // Fetch parent events IN PARALLEL
+        let parent_futures: Vec<_> = parent_ids.iter()
+            .map(|parent_id| self.fetch_event(parent_id))
+            .collect();
+        
+        // Start fetching replies in parallel with parents
+        let reply_filter = Filter::new()
+            .kind(Kind::TextNote)
+            .event(*event_id)
+            .limit(50);
+        
+        let replies_future = self.client.fetch_events(reply_filter, DEFAULT_TIMEOUT);
+        
+        // Wait for both parent fetches and replies concurrently
+        let (parent_results, replies_result) = futures::future::join(
+            join_all(parent_futures),
+            replies_future
+        ).await;
+        
+        // Collect successful parent events
+        let mut parents: Vec<Event> = parent_results.into_iter()
+            .filter_map(|r| r.ok().flatten())
+            .collect();
+        
+        // Collect grandparent IDs from all parents
+        let grandparent_ids: Vec<EventId> = parents.iter()
+            .flat_map(|parent| {
+                parent.tags.iter()
                     .filter_map(|tag| {
                         if let Some(TagStandard::Event { event_id, .. }) = tag.as_standardized() {
                             Some(event_id.clone())
@@ -362,15 +405,20 @@ impl RelayManager {
                             None
                         }
                     })
-                    .collect();
-                
-                parents.push(parent);
-                
-                // Also try to get grandparent (one level up)
-                for gp_id in &grandparent_ids {
-                    if let Ok(Some(gp)) = self.fetch_event(gp_id).await {
-                        parents.push(gp);
-                    }
+            })
+            .collect();
+        
+        // Fetch grandparents IN PARALLEL (if any)
+        if !grandparent_ids.is_empty() {
+            let grandparent_futures: Vec<_> = grandparent_ids.iter()
+                .map(|gp_id| self.fetch_event(gp_id))
+                .collect();
+            
+            let grandparent_results = join_all(grandparent_futures).await;
+            
+            for result in grandparent_results {
+                if let Ok(Some(gp)) = result {
+                    parents.push(gp);
                 }
             }
         }
@@ -378,15 +426,8 @@ impl RelayManager {
         // Sort parents by timestamp (oldest first for display)
         parents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         
-        // Fetch replies to the target event
-        let reply_filter = Filter::new()
-            .kind(Kind::TextNote)
-            .event(*event_id)
-            .limit(50);
-        
-        let replies = self.client
-            .fetch_events(reply_filter, DEFAULT_TIMEOUT)
-            .await
+        // Handle replies result
+        let replies = replies_result
             .map_err(|e| format!("Failed to fetch replies: {}", e))?;
         
         let mut reply_vec: Vec<Event> = replies.into_iter().collect();

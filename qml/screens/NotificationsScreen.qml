@@ -13,6 +13,8 @@ Rectangle {
     
     // Signal to open a note/thread
     signal openNote(string noteId)
+    // Signal to open a profile
+    signal openProfile(string pubkey)
     
     // Keyboard navigation
     Keys.onPressed: function(event) {
@@ -306,7 +308,7 @@ Rectangle {
                         }
                     }
                     
-                    // Avatar
+                    // Avatar - clickable
                     Rectangle {
                         Layout.preferredWidth: 40
                         Layout.preferredHeight: 40
@@ -333,6 +335,16 @@ Rectangle {
                             font.weight: Font.Bold
                             visible: !notificationData.authorPicture
                         }
+                        
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (notificationData.authorPubkey) {
+                                    root.openProfile(notificationData.authorPubkey)
+                                }
+                            }
+                        }
                     }
                     
                     // Content
@@ -340,14 +352,27 @@ Rectangle {
                         Layout.fillWidth: true
                         spacing: 4
                         
-                        // Author and action
+                        // Author and action - clickable
                         Text {
+                            id: authorNameText
                             Layout.fillWidth: true
                             text: notificationData.authorName || "Someone"
-                            color: "#ffffff"
+                            color: authorNameMouseArea.containsMouse ? "#9333ea" : "#ffffff"
                             font.pixelSize: 14
                             font.weight: Font.Bold
                             elide: Text.ElideRight
+                            
+                            MouseArea {
+                                id: authorNameMouseArea
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                hoverEnabled: true
+                                onClicked: {
+                                    if (notificationData.authorPubkey) {
+                                        root.openProfile(notificationData.authorPubkey)
+                                    }
+                                }
+                            }
                         }
                         
                         // Preview

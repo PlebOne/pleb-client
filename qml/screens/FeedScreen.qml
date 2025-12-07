@@ -13,6 +13,8 @@ Rectangle {
     
     // Signal to request thread view navigation
     signal openThread(string noteId)
+    // Signal to request profile view navigation
+    signal openProfile(string pubkey)
     
     // Keyboard navigation
     Keys.onPressed: function(event) {
@@ -547,6 +549,7 @@ Rectangle {
                         if (noteJson) {
                             var note = JSON.parse(noteJson)
                             noteId = note.id || ""
+                            authorPubkey = note.pubkey || ""
                             authorName = note.authorName || "Unknown"
                             authorPicture = note.authorPicture || ""
                             authorNip05 = note.authorNip05 || ""
@@ -579,6 +582,7 @@ Rectangle {
                 ListView.onPooled: {
                     // Clear data when pooled to avoid stale display
                     noteId = ""
+                    authorPubkey = ""
                     content = ""
                     authorName = ""
                     authorPicture = ""
@@ -615,6 +619,10 @@ Rectangle {
                 onNoteClicked: function(id) {
                     console.log("Opening thread for note:", id)
                     root.openThread(id)
+                }
+                onAuthorClicked: function(pubkey) {
+                    console.log("Opening profile for:", pubkey)
+                    root.openProfile(pubkey)
                 }
             }
             

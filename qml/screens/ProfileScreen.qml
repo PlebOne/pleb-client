@@ -12,6 +12,9 @@ Rectangle {
     property string publicKey: ""
     property string displayName: ""
     property var appController: null
+    property bool isOtherProfile: false  // True when viewing someone else's profile
+    
+    signal back()
     
     // Profile controller
     ProfileController {
@@ -84,6 +87,30 @@ Rectangle {
                 anchors.fill: parent
                 anchors.leftMargin: 16
                 anchors.rightMargin: 16
+                
+                // Back button (visible when viewing other profiles)
+                Button {
+                    text: "←"
+                    font.pixelSize: 20
+                    implicitWidth: 40
+                    implicitHeight: 40
+                    visible: root.isOtherProfile
+                    
+                    background: Rectangle {
+                        color: parent.pressed ? "#333333" : (parent.hovered ? "#252525" : "transparent")
+                        radius: 20
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#ffffff"
+                        font: parent.font
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: root.back()
+                }
                 
                 Text {
                     text: "Profile"
@@ -167,16 +194,32 @@ Rectangle {
                         Layout.preferredHeight: 200
                         
                         Image {
+                            id: bannerImage
                             anchors.fill: parent
                             source: profileController.banner || ""
                             fillMode: Image.PreserveAspectCrop
-                            visible: profileController.banner.length > 0
+                            visible: (profileController.banner || "").length > 0 && status === Image.Ready
+                            asynchronous: true
+                            cache: true
+                            
+                            onStatusChanged: {
+                                if (status === Image.Error) {
+                                    console.log("ProfileScreen: Failed to load banner:", profileController.banner)
+                                }
+                            }
+                        }
+                        
+                        // Loading indicator for banner
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "#1a1a2e"
+                            visible: (profileController.banner || "").length > 0 && bannerImage.status === Image.Loading
                         }
                         
                         // Fallback gradient
                         Rectangle {
                             anchors.fill: parent
-                            visible: profileController.banner.length === 0
+                            visible: bannerImage.status !== Image.Ready && bannerImage.status !== Image.Loading
                             gradient: Gradient {
                                 GradientStop { position: 0.0; color: "#1a1a2e" }
                                 GradientStop { position: 1.0; color: "#9333ea" }
@@ -202,21 +245,37 @@ Rectangle {
                                 Layout.preferredWidth: 100
                                 Layout.preferredHeight: 100
                                 radius: 50
-                                color: "#333333"
+                                color: "#9333ea"
                                 border.color: "#0a0a0a"
                                 border.width: 4
                                 
                                 Image {
+                                    id: profileAvatarImage
                                     anchors.fill: parent
                                     anchors.margins: 4
                                     source: profileController.picture || ""
                                     fillMode: Image.PreserveAspectCrop
-                                    visible: profileController.picture.length > 0
-                                    
+                                    visible: (profileController.picture || "").length > 0 && status === Image.Ready
+                                    asynchronous: true
+                                    cache: true
+                                    sourceSize.width: 200
+                                    sourceSize.height: 200
                                     layer.enabled: true
-                                    layer.effect: Item {
-                                        // Circular mask would go here
+                                    
+                                    onStatusChanged: {
+                                        if (status === Image.Error) {
+                                            console.log("ProfileScreen: Failed to load avatar:", profileController.picture)
+                                        }
                                     }
+                                }
+                                
+                                // Loading indicator
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.margins: 4
+                                    radius: width / 2
+                                    color: "#2a2a2a"
+                                    visible: (profileController.picture || "").length > 0 && profileAvatarImage.status === Image.Loading
                                 }
                                 
                                 // Fallback initial
@@ -229,7 +288,7 @@ Rectangle {
                                     color: "#ffffff"
                                     font.pixelSize: 40
                                     font.weight: Font.Bold
-                                    visible: profileController.picture.length === 0
+                                    visible: profileAvatarImage.status !== Image.Ready && profileAvatarImage.status !== Image.Loading
                                 }
                             }
                             
