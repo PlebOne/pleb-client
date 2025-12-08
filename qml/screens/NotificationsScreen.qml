@@ -30,9 +30,6 @@ Rectangle {
         }
     }
     
-    // Focus when visible
-    onVisibleChanged: if (visible) forceActiveFocus()
-    
     // Load notifications when controller is set
     onNotificationControllerChanged: {
         if (notificationController) {
@@ -57,6 +54,38 @@ Rectangle {
         
         function onError_occurred(error) {
             console.log("[DEBUG] Notification error:", error)
+        }
+        
+        function onNew_notifications_found(count) {
+            if (count > 0) {
+                console.log("[DEBUG] Found", count, "new notifications")
+            }
+        }
+    }
+    
+    // Timer for polling new notifications when visible
+    Timer {
+        id: notificationPollTimer
+        interval: 30000  // Poll every 30 seconds
+        repeat: true
+        running: root.visible && notificationController !== null
+        
+        onTriggered: {
+            if (notificationController && !notificationController.is_loading) {
+                console.log("[DEBUG] Polling for new notifications...")
+                notificationController.check_for_new()
+            }
+        }
+    }
+    
+    // Also check for new when becoming visible
+    onVisibleChanged: {
+        if (visible) {
+            forceActiveFocus()
+            // Check for new notifications when screen becomes visible
+            if (notificationController && !notificationController.is_loading) {
+                notificationController.check_for_new()
+            }
         }
     }
     

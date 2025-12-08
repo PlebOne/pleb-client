@@ -306,6 +306,28 @@ Rectangle {
             }
         }
         
+        // YouTube videos (embedded player)
+        Repeater {
+            model: extractYouTubeUrls(content)
+            
+            delegate: YouTubePlayer {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 280
+                url: modelData
+            }
+        }
+        
+        // Fountain.fm podcasts (in-client player)
+        Repeater {
+            model: extractFountainUrls(content)
+            
+            delegate: FountainPlayer {
+                Layout.fillWidth: true
+                url: modelData
+                feedController: root.feedController
+            }
+        }
+        
         // Link previews (non-media URLs)
         Repeater {
             model: extractPreviewUrls(content)
@@ -327,16 +349,27 @@ Rectangle {
                 model: images || []
                 
                 delegate: Rectangle {
-                    width: images.length === 1 ? Math.min(contentColumn.width, 400) : Math.min((contentColumn.width - 8) / 2, 200)
-                    height: width * 0.75
+                    id: imageContainer
+                    // For single images, use up to full width; for multiple, use half width
+                    property real maxWidth: images.length === 1 ? contentColumn.width : Math.min((contentColumn.width - 8) / 2, 250)
+                    // Use actual aspect ratio when loaded, fallback to 4:3
+                    property real aspectRatio: galleryImage.status === Image.Ready && galleryImage.implicitWidth > 0 ? 
+                        galleryImage.implicitHeight / galleryImage.implicitWidth : 0.75
+                    
+                    width: maxWidth
+                    // Height based on image aspect ratio, with max height constraint
+                    height: Math.min(maxWidth * aspectRatio, 350)
                     radius: 8
                     color: "#2a2a2a"
                     clip: true
                     
                     Image {
-                        anchors.fill: parent
+                        id: galleryImage
+                        anchors.centerIn: parent
+                        width: parent.width
+                        height: parent.height
                         source: modelData
-                        fillMode: Image.PreserveAspectCrop
+                        fillMode: Image.PreserveAspectFit
                         asynchronous: true
                         
                         // Loading placeholder
@@ -595,7 +628,62 @@ Rectangle {
         return [...new Set(uris)]
     }
     
-    // Extract URLs for link previews (non-media, non-nostr)
+    // Check if URL is a YouTube URL
+    function isYouTubeUrl(urlStr) {
+        if (!urlStr) return false
+        var lower = urlStr.toLowerCase()
+        return lower.includes("youtube.com/watch") || 
+               lower.includes("youtu.be/") || 
+               lower.includes("youtube.com/shorts/") ||
+               lower.includes("youtube.com/embed/")
+    }
+    
+    // Check if URL is a Fountain.fm URL
+    function isFountainUrl(urlStr) {
+        if (!urlStr) return false
+        var lower = urlStr.toLowerCase()
+        return lower.includes("fountain.fm/episode") || lower.includes("fountain.fm/show")
+    }
+    
+    // Extract YouTube URLs from text
+    function extractYouTubeUrls(text) {
+        if (!text) return []
+        
+        var urls = []
+        var pattern = /https?:\/\/[^\s<>\[\]]+/g
+        var match
+        
+        while ((match = pattern.exec(text)) !== null) {
+            var url = match[0]
+            if (isYouTubeUrl(url)) {
+                urls.push(url)
+            }
+        }
+        
+        // Deduplicate and limit to first 3 videos
+        return [...new Set(urls)].slice(0, 3)
+    }
+    
+    // Extract Fountain.fm URLs from text
+    function extractFountainUrls(text) {
+        if (!text) return []
+        
+        var urls = []
+        var pattern = /https?:\/\/[^\s<>\[\]]+/g
+        var match
+        
+        while ((match = pattern.exec(text)) !== null) {
+            var url = match[0]
+            if (isFountainUrl(url)) {
+                urls.push(url)
+            }
+        }
+        
+        // Deduplicate and limit to first 3 podcasts
+        return [...new Set(urls)].slice(0, 3)
+    }
+    
+    // Extract URLs for link previews (non-media, non-nostr, non-youtube, non-fountain)
     function extractPreviewUrls(text) {
         if (!text) return []
         
@@ -609,6 +697,16 @@ Rectangle {
             
             // Skip media URLs (shown in gallery)
             if (lower.match(/\.(jpg|jpeg|png|gif|webp|mp4|webm|mov)$/)) {
+                continue
+            }
+            
+            // Skip YouTube URLs (shown with embedded player)
+            if (isYouTubeUrl(url)) {
+                continue
+            }
+            
+            // Skip Fountain.fm URLs (shown with podcast player)
+            if (isFountainUrl(url)) {
                 continue
             }
             

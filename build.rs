@@ -25,6 +25,8 @@ fn main() {
                 "qml/components/EmbeddedProfile.qml",
                 "qml/components/LinkPreview.qml",
                 "qml/components/VideoPlayer.qml",
+                "qml/components/YouTubePlayer.qml",
+                "qml/components/FountainPlayer.qml",
                 "qml/components/ImageViewer.qml",
                 "qml/components/ZapDialog.qml",
                 "qml/components/ReactionPicker.qml",

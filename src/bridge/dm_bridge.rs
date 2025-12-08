@@ -60,6 +60,22 @@ pub mod qobject {
         /// Refresh conversations
         #[qinvokable]
         fn refresh(self: Pin<&mut DmController>);
+        
+        /// Set category filter (empty string = all, "favorites", "unfiltered", "regular", "archive")
+        #[qinvokable]
+        fn set_category_filter(self: Pin<&mut DmController>, category: &QString);
+        
+        /// Get current category filter
+        #[qinvokable]
+        fn get_category_filter(self: &DmController) -> QString;
+        
+        /// Set category for a conversation
+        #[qinvokable]
+        fn set_conversation_category(self: Pin<&mut DmController>, peer_pubkey: &QString, category: &QString);
+        
+        /// Get category counts (returns JSON: {all, favorites, unfiltered, regular, archive})
+        #[qinvokable]
+        fn get_category_counts(self: &DmController) -> QString;
     }
 
     unsafe extern "RustQt" {
@@ -89,7 +105,7 @@ use nostr_sdk::prelude::*;
 use tokio::sync::Mutex;
 
 use crate::signer::SignerClient;
-use crate::nostr::dm::{DmManager, DmMessage, DmConversation, DmProtocol, fetch_nip04_dms, get_nip04_peer, format_pubkey_short};
+use crate::nostr::dm::{DmManager, DmMessage, DmConversation, DmProtocol, ConversationCategory, fetch_nip04_dms, get_nip04_peer, format_pubkey_short};
 use crate::nostr::relay::DEFAULT_TIMEOUT;
 use crate::nostr::profile::ProfileCache;
 
@@ -123,6 +139,7 @@ pub struct DmControllerRust {
     user_nsec: Option<String>,
     current_protocol: DmProtocol,
     initialized: bool,
+    category_filter: Option<ConversationCategory>,
 }
 
 impl Default for DmControllerRust {
@@ -137,6 +154,7 @@ impl Default for DmControllerRust {
             user_nsec: None,
             current_protocol: DmProtocol::Nip04,
             initialized: false,
+            category_filter: None,
         }
     }
 }
@@ -236,7 +254,7 @@ impl qobject::DmController {
         if should_use_cache {
             tracing::info!("Using cached DM conversations");
             let dm_mgr = DM_MANAGER.read().unwrap();
-            let count = dm_mgr.get_conversations().len() as i32;
+            let count = dm_mgr.get_conversations_by_category(self.category_filter).len() as i32;
             let unread = dm_mgr.total_unread() as i32;
             drop(dm_mgr);
             
@@ -392,7 +410,11 @@ impl qobject::DmController {
                     }
                 }
                 
-                let count = dm_mgr.get_conversations().len() as i32;
+                // Apply saved categories
+                dm_mgr.apply_saved_categories();
+                
+                // Get count based on current filter
+                let count = dm_mgr.get_conversations_by_category(self.category_filter).len() as i32;
                 let unread = dm_mgr.total_unread() as i32;
                 
                 drop(dm_mgr);
@@ -408,7 +430,7 @@ impl qobject::DmController {
                 self.as_mut().set_is_loading(false);
                 self.as_mut().conversations_updated();
                 
-                tracing::info!("Loaded {} conversations", count);
+                tracing::info!("Loaded {} conversations (filtered)", count);
             }
             Err(e) => {
                 tracing::error!("Failed to load conversations: {}", e);
@@ -421,13 +443,91 @@ impl qobject::DmController {
     
     pub fn get_conversation(&self, index: i32) -> QString {
         let dm_mgr = DM_MANAGER.read().unwrap();
-        let convos = dm_mgr.get_conversations();
+        let convos = dm_mgr.get_conversations_by_category(self.category_filter);
         
         if let Some(convo) = convos.get(index as usize) {
             QString::from(&convo.to_json())
         } else {
             QString::from("{}")
         }
+    }
+    
+    pub fn set_category_filter(mut self: Pin<&mut Self>, category: &QString) {
+        let cat_str = category.to_string();
+        let filter = match cat_str.as_str() {
+            "favorites" => Some(ConversationCategory::Favorites),
+            "unfiltered" => Some(ConversationCategory::Unfiltered),
+            "regular" => Some(ConversationCategory::Regular),
+            "archive" => Some(ConversationCategory::Archive),
+            _ => None, // "all" or empty
+        };
+        
+        {
+            let mut rust = self.as_mut().rust_mut();
+            rust.category_filter = filter;
+        }
+        
+        // Update conversation count based on filter
+        let count = {
+            let dm_mgr = DM_MANAGER.read().unwrap();
+            dm_mgr.get_conversations_by_category(filter).len() as i32
+        };
+        
+        self.as_mut().set_conversation_count(count);
+        self.as_mut().conversations_updated();
+        
+        tracing::info!("Category filter set to: {:?}", filter);
+    }
+    
+    pub fn get_category_filter(&self) -> QString {
+        match self.category_filter {
+            Some(ConversationCategory::Favorites) => QString::from("favorites"),
+            Some(ConversationCategory::Unfiltered) => QString::from("unfiltered"),
+            Some(ConversationCategory::Regular) => QString::from("regular"),
+            Some(ConversationCategory::Archive) => QString::from("archive"),
+            None => QString::from("all"),
+        }
+    }
+    
+    pub fn set_conversation_category(mut self: Pin<&mut Self>, peer_pubkey: &QString, category: &QString) {
+        let pubkey_str = peer_pubkey.to_string();
+        let cat_str = category.to_string();
+        
+        let cat = match cat_str.as_str() {
+            "favorites" => ConversationCategory::Favorites,
+            "archive" => ConversationCategory::Archive,
+            "unfiltered" => ConversationCategory::Unfiltered,
+            _ => ConversationCategory::Regular,
+        };
+        
+        {
+            let mut dm_mgr = DM_MANAGER.write().unwrap();
+            dm_mgr.set_category(&pubkey_str, cat);
+        }
+        
+        // Refresh counts and list
+        let count = {
+            let dm_mgr = DM_MANAGER.read().unwrap();
+            dm_mgr.get_conversations_by_category(self.category_filter).len() as i32
+        };
+        
+        self.as_mut().set_conversation_count(count);
+        self.as_mut().conversations_updated();
+        
+        tracing::info!("Set conversation {} category to {:?}", &pubkey_str[..16], cat);
+    }
+    
+    pub fn get_category_counts(&self) -> QString {
+        let dm_mgr = DM_MANAGER.read().unwrap();
+        let (all, favorites, unfiltered, regular, archive) = dm_mgr.get_category_counts();
+        
+        QString::from(&serde_json::json!({
+            "all": all,
+            "favorites": favorites,
+            "unfiltered": unfiltered,
+            "regular": regular,
+            "archive": archive
+        }).to_string())
     }
     
     pub fn select_conversation(mut self: Pin<&mut Self>, peer_pubkey: &QString) {

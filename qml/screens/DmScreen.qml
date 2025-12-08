@@ -154,6 +154,178 @@ Rectangle {
                     }
                 }
                 
+                // Category tabs
+                Rectangle {
+                    id: categoryTabBar
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 40
+                    color: "#0d0d0d"
+                    
+                    property var categoryCounts: ({all: 0, favorites: 0, unfiltered: 0, regular: 0, archive: 0})
+                    property string currentCategory: "all"
+                    
+                    Component.onCompleted: updateCounts()
+                    
+                    function updateCounts() {
+                        if (dmController) {
+                            try {
+                                var json = dmController.get_category_counts()
+                                categoryCounts = JSON.parse(json)
+                            } catch (e) {
+                                console.log("Failed to parse category counts:", e)
+                            }
+                        }
+                    }
+                    
+                    Connections {
+                        target: dmController
+                        ignoreUnknownSignals: true
+                        
+                        function onConversations_updated() {
+                            categoryTabBar.updateCounts()
+                        }
+                    }
+                    
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 2
+                        
+                        // Inbox tab (regular conversations not in other categories)
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.topMargin: 4
+                            Layout.bottomMargin: 4
+                            color: parent.parent.currentCategory === "all" ? "#2a2a2a" : "transparent"
+                            radius: 6
+                            
+                            Text {
+                                anchors.centerIn: parent
+                                text: "📥 " + parent.parent.parent.categoryCounts.all
+                                color: parent.parent.parent.currentCategory === "all" ? "#ffffff" : "#888888"
+                                font.pixelSize: 11
+                                font.weight: parent.parent.parent.currentCategory === "all" ? Font.Medium : Font.Normal
+                            }
+                            
+                            ToolTip.visible: ma0.containsMouse
+                            ToolTip.text: "Inbox - conversations not in other categories"
+                            ToolTip.delay: 500
+                            
+                            MouseArea {
+                                id: ma0
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                hoverEnabled: true
+                                onClicked: {
+                                    parent.parent.parent.currentCategory = "all"
+                                    if (dmController) dmController.set_category_filter("all")
+                                }
+                            }
+                        }
+                        
+                        // Favorites tab
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.topMargin: 4
+                            Layout.bottomMargin: 4
+                            color: parent.parent.currentCategory === "favorites" ? "#2a2a2a" : "transparent"
+                            radius: 6
+                            
+                            Text {
+                                anchors.centerIn: parent
+                                text: "⭐ " + parent.parent.parent.categoryCounts.favorites
+                                color: parent.parent.parent.currentCategory === "favorites" ? "#fbbf24" : "#888888"
+                                font.pixelSize: 11
+                                font.weight: parent.parent.parent.currentCategory === "favorites" ? Font.Medium : Font.Normal
+                            }
+                            
+                            ToolTip.visible: ma1.containsMouse
+                            ToolTip.text: "Favorites"
+                            ToolTip.delay: 500
+                            
+                            MouseArea {
+                                id: ma1
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                hoverEnabled: true
+                                onClicked: {
+                                    parent.parent.parent.currentCategory = "favorites"
+                                    if (dmController) dmController.set_category_filter("favorites")
+                                }
+                            }
+                        }
+                        
+                        // Unfiltered tab (new/never replied)
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.topMargin: 4
+                            Layout.bottomMargin: 4
+                            color: parent.parent.currentCategory === "unfiltered" ? "#2a2a2a" : "transparent"
+                            radius: 6
+                            
+                            Text {
+                                anchors.centerIn: parent
+                                text: "📬 " + parent.parent.parent.categoryCounts.unfiltered
+                                color: parent.parent.parent.currentCategory === "unfiltered" ? "#60a5fa" : "#888888"
+                                font.pixelSize: 11
+                                font.weight: parent.parent.parent.currentCategory === "unfiltered" ? Font.Medium : Font.Normal
+                            }
+                            
+                            ToolTip.visible: ma2.containsMouse
+                            ToolTip.text: "Unfiltered (never replied)"
+                            ToolTip.delay: 500
+                            
+                            MouseArea {
+                                id: ma2
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                hoverEnabled: true
+                                onClicked: {
+                                    parent.parent.parent.currentCategory = "unfiltered"
+                                    if (dmController) dmController.set_category_filter("unfiltered")
+                                }
+                            }
+                        }
+                        
+                        // Archive tab
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.topMargin: 4
+                            Layout.bottomMargin: 4
+                            color: parent.parent.currentCategory === "archive" ? "#2a2a2a" : "transparent"
+                            radius: 6
+                            
+                            Text {
+                                anchors.centerIn: parent
+                                text: "🗄️ " + parent.parent.parent.categoryCounts.archive
+                                color: parent.parent.parent.currentCategory === "archive" ? "#a78bfa" : "#888888"
+                                font.pixelSize: 11
+                                font.weight: parent.parent.parent.currentCategory === "archive" ? Font.Medium : Font.Normal
+                            }
+                            
+                            ToolTip.visible: ma3.containsMouse
+                            ToolTip.text: "Archive"
+                            ToolTip.delay: 500
+                            
+                            MouseArea {
+                                id: ma3
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                hoverEnabled: true
+                                onClicked: {
+                                    parent.parent.parent.currentCategory = "archive"
+                                    if (dmController) dmController.set_category_filter("archive")
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 // Conversation list
                 ListView {
                     id: conversationList
@@ -186,9 +358,42 @@ Rectangle {
                         MouseArea {
                             anchors.fill: parent
                             hoverEnabled: true
-                            onClicked: {
-                                if (dmController && convoData) {
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            onClicked: function(mouse) {
+                                if (mouse.button === Qt.RightButton) {
+                                    categoryMenu.popup()
+                                } else if (dmController && convoData) {
                                     dmController.select_conversation(convoData.peerPubkey)
+                                }
+                            }
+                        }
+                        
+                        // Category context menu
+                        Menu {
+                            id: categoryMenu
+                            
+                            MenuItem {
+                                text: "⭐ Add to Favorites"
+                                onTriggered: {
+                                    if (dmController && convoDelegate.convoData) {
+                                        dmController.set_conversation_category(convoDelegate.convoData.peerPubkey, "favorites")
+                                    }
+                                }
+                            }
+                            MenuItem {
+                                text: "📥 Move to Inbox"
+                                onTriggered: {
+                                    if (dmController && convoDelegate.convoData) {
+                                        dmController.set_conversation_category(convoDelegate.convoData.peerPubkey, "regular")
+                                    }
+                                }
+                            }
+                            MenuItem {
+                                text: "🗄️ Archive"
+                                onTriggered: {
+                                    if (dmController && convoDelegate.convoData) {
+                                        dmController.set_conversation_category(convoDelegate.convoData.peerPubkey, "archive")
+                                    }
                                 }
                             }
                         }
@@ -227,20 +432,43 @@ Rectangle {
                                 }
                             }
                             
-                            // Unread badge
-                            Rectangle {
-                                Layout.preferredWidth: 20
-                                Layout.preferredHeight: 20
-                                radius: 10
-                                color: "#9333ea"
-                                visible: convoDelegate.convoData && convoDelegate.convoData.unreadCount > 0
+                            ColumnLayout {
+                                spacing: 4
                                 
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: convoDelegate.convoData ? convoDelegate.convoData.unreadCount : ""
-                                    color: "#ffffff"
-                                    font.pixelSize: 10
-                                    font.weight: Font.Bold
+                                // Protocol badge
+                                Rectangle {
+                                    Layout.preferredHeight: 16
+                                    Layout.preferredWidth: protocolBadgeText.width + 8
+                                    radius: 4
+                                    color: convoDelegate.convoData && convoDelegate.convoData.protocol === "NIP-04" ? "#3b2a1a" : "#1a2a3b"
+                                    visible: convoDelegate.convoData && convoDelegate.convoData.protocol
+                                    
+                                    Text {
+                                        id: protocolBadgeText
+                                        anchors.centerIn: parent
+                                        text: convoDelegate.convoData ? convoDelegate.convoData.protocol : ""
+                                        color: convoDelegate.convoData && convoDelegate.convoData.protocol === "NIP-04" ? "#f59e0b" : "#22c55e"
+                                        font.pixelSize: 9
+                                        font.weight: Font.Medium
+                                    }
+                                }
+                                
+                                // Unread badge
+                                Rectangle {
+                                    Layout.preferredWidth: 20
+                                    Layout.preferredHeight: 20
+                                    Layout.alignment: Qt.AlignRight
+                                    radius: 10
+                                    color: "#9333ea"
+                                    visible: convoDelegate.convoData && convoDelegate.convoData.unreadCount > 0
+                                    
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: convoDelegate.convoData ? convoDelegate.convoData.unreadCount : ""
+                                        color: "#ffffff"
+                                        font.pixelSize: 10
+                                        font.weight: Font.Bold
+                                    }
                                 }
                             }
                         }
@@ -298,23 +526,50 @@ Rectangle {
                         
                         Item { Layout.fillWidth: true }
                         
-                        // Protocol indicator
+                        // Protocol indicator (shows send protocol, click to toggle)
                         Rectangle {
                             Layout.preferredHeight: 24
-                            Layout.preferredWidth: protocolText.width + 16
+                            Layout.preferredWidth: protocolRow.width + 16
                             radius: 12
-                            color: "#1a1a1a"
+                            color: dmController && dmController.get_protocol() === "NIP-04" ? "#3b2a1a" : "#1a2a3b"
                             
-                            Text {
-                                id: protocolText
+                            RowLayout {
+                                id: protocolRow
                                 anchors.centerIn: parent
-                                text: dmController ? dmController.get_protocol() : "NIP-17"
-                                color: "#888888"
-                                font.pixelSize: 11
+                                spacing: 4
+                                
+                                Text {
+                                    text: "↑"
+                                    color: "#666666"
+                                    font.pixelSize: 9
+                                }
+                                
+                                Text {
+                                    id: protocolText
+                                    text: dmController ? dmController.get_protocol() : "NIP-17"
+                                    color: dmController && dmController.get_protocol() === "NIP-04" ? "#f59e0b" : "#22c55e"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Medium
+                                }
                             }
                             
                             MouseArea {
                                 anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: dmController.toggle_protocol()
+                            }
+                            
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Click to switch send protocol\nNIP-04: Legacy (widely supported)\nNIP-17: Modern (more private)"
+                            ToolTip.delay: 500
+                            
+                            property bool hovered: false
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onEntered: parent.hovered = true
+                                onExited: parent.hovered = false
                                 onClicked: dmController.toggle_protocol()
                             }
                         }

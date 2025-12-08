@@ -1,5 +1,5 @@
 Name:           pleb-client
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        A native Nostr client for Linux
 
@@ -36,5 +36,11 @@ install -m 644 %{_sourcedir}/icon.svg %{buildroot}/usr/share/icons/hicolor/scala
 /usr/share/icons/hicolor/scalable/apps/pleb-client.svg
 
 %changelog
+* Sat Dec 07 2024 PlebOne <contact@pleb.one> - 0.1.1-1
+- Add Relays screen with NIP-65 relay management
+- Click on user avatars/names to view profiles
+- Fix profile picture loading on ProfileScreen and Sidebar
+- Add loading indicators for images
+
 * Fri Dec 06 2024 PlebOne <contact@pleb.one> - 0.1.0-1
 - Initial release

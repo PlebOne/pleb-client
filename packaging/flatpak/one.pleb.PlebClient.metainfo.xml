@@ -39,6 +39,19 @@
     <content_attribute id="social-info">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.1.1" date="2024-12-07">
+      <description>
+        <p>Relays screen and profile navigation</p>
+        <ul>
+          <li>Add Relays screen with NIP-65 relay management</li>
+          <li>Display read/write/both relay types with visual indicators</li>
+          <li>Click on user avatars/names to view their profiles</li>
+          <li>Back navigation from other profiles</li>
+          <li>Fix profile picture loading on ProfileScreen and Sidebar</li>
+          <li>Add loading indicators for images</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2024-12-06">
       <description>
         <p>Initial release of Pleb Client</p>

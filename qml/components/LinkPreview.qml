@@ -121,18 +121,24 @@ Rectangle {
             visible: previewData && !isLoading
             spacing: 0
             
-            // Preview image
+            // Preview image - uses aspect ratio fit to avoid cropping
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: previewData?.image ? 150 : 0
+                Layout.preferredHeight: previewImage.status === Image.Ready ? 
+                    Math.min(previewImage.implicitHeight * (width / previewImage.implicitWidth), 250) : 
+                    (previewData?.image ? 150 : 0)
+                Layout.maximumHeight: 250
                 color: "#2a2a2a"
                 visible: !!(previewData?.image)
                 clip: true
                 
                 Image {
-                    anchors.fill: parent
+                    id: previewImage
+                    anchors.centerIn: parent
+                    width: parent.width
+                    height: parent.height
                     source: previewData?.image || ""
-                    fillMode: Image.PreserveAspectCrop
+                    fillMode: Image.PreserveAspectFit
                     asynchronous: true
                     
                     Rectangle {

@@ -2404,6 +2404,8 @@ async fn fetch_og_metadata(url: &str) -> Result<String, String> {
     let mut description = None;
     let mut image = None;
     let mut site_name = None;
+    let mut audio = None;
+    let mut video = None;
     
     // Simple regex-based OG parsing (faster than full HTML parsing)
     let og_regex = regex::Regex::new(r#"<meta[^>]*(?:property|name)=["']og:([^"']+)["'][^>]*content=["']([^"']*?)["'][^>]*/?>|<meta[^>]*content=["']([^"']*?)["'][^>]*(?:property|name)=["']og:([^"']+)["'][^>]*/?>"#).unwrap();
@@ -2422,6 +2424,8 @@ async fn fetch_og_metadata(url: &str) -> Result<String, String> {
             "description" => description = Some(content.to_string()),
             "image" => image = Some(content.to_string()),
             "site_name" => site_name = Some(content.to_string()),
+            "audio" => audio = Some(content.to_string()),
+            "video" => video = Some(content.to_string()),
             _ => {}
         }
     }
@@ -2470,6 +2474,8 @@ async fn fetch_og_metadata(url: &str) -> Result<String, String> {
         "description": description.map(|d| decode_html(&d)),
         "image": image,
         "siteName": site_name,
+        "audio": audio,
+        "video": video,
     });
     
     Ok(json.to_string())
