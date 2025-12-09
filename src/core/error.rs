@@ -1,5 +1,7 @@
 //! Error types
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

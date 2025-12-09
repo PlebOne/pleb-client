@@ -2,6 +2,8 @@
 //!
 //! Provides wallet functionality for sending and receiving zaps via NWC
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use nostr_sdk::prelude::*;
 use std::sync::Arc;
 use tokio::sync::RwLock;

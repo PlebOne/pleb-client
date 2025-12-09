@@ -9,6 +9,7 @@ Rectangle {
     focus: true
     
     property var searchController: null
+    property var feedController: null
     
     signal openProfile(string pubkey)
     signal openThread(string noteId)
@@ -29,10 +30,16 @@ Rectangle {
         target: searchController
         ignoreUnknownSignals: true
         function onSearch_completed() {
-            console.log("[SearchScreen] Search completed - users:", searchController.user_count, "notes:", searchController.note_count)
+            console.log("[SearchScreen] Search completed - users:", searchController.user_count, "notes:", searchController.note_count, "search_type:", searchController.search_type)
         }
         function onError_occurred(error) {
             console.log("[SearchScreen] Error:", error)
+        }
+        function onUser_countChanged() {
+            console.log("[SearchScreen] user_count changed to:", searchController.user_count)
+        }
+        function onSearch_typeChanged() {
+            console.log("[SearchScreen] search_type changed to:", searchController.search_type)
         }
     }
     
@@ -98,16 +105,28 @@ Rectangle {
                                 Keys.onEnterPressed: performSearch()
                                 
                                 function performSearch() {
+                                    console.log("[SearchScreen] performSearch called")
                                     var query = text.trim()
+                                    console.log("[SearchScreen] query:", query, "searchController:", searchController)
                                     if (query.length > 0) {
+                                        if (!searchController) {
+                                            console.log("[SearchScreen] ERROR: searchController is null!")
+                                            return
+                                        }
                                         if (query.startsWith("#")) {
+                                            console.log("[SearchScreen] Calling search_hashtag")
                                             searchController.search_hashtag(query)
                                         } else if (query.startsWith("@") || query.startsWith("npub")) {
+                                            console.log("[SearchScreen] Calling search_users for user query")
                                             searchController.search_users(query.replace(/^@/, ""))
                                         } else {
                                             // Default: search both users and notes
+                                            console.log("[SearchScreen] Calling search_users for general query")
                                             searchController.search_users(query)
                                         }
+                                        console.log("[SearchScreen] Search function called successfully")
+                                    } else {
+                                        console.log("[SearchScreen] Empty query, not searching")
                                     }
                                 }
                             }
@@ -257,7 +276,6 @@ Rectangle {
                 id: userList
                 anchors.fill: parent
                 anchors.margins: 20
-                visible: searchController && searchController.search_type === "users"
                 clip: true
                 spacing: 8
                 
@@ -266,29 +284,31 @@ Rectangle {
                 delegate: Rectangle {
                     id: userDelegate
                     width: userList.width
-                    height: 72
-                    color: mouseArea.containsMouse ? "#252525" : "#1a1a1a"
+                    height: 80
+                    color: mouseArea.containsMouse ? "#1a1a1a" : "transparent"
                     radius: 12
                     
-                    property var userData: ({})
+                    property var userData: null
                     
                     Component.onCompleted: {
                         if (searchController) {
-                            try {
-                                var json = searchController.get_user(index)
+                            var json = searchController.get_user(index)
+                            if (json) {
                                 userData = JSON.parse(json)
-                            } catch (e) {
-                                userData = {}
                             }
                         }
                     }
-                    
+
                     MouseArea {
                         id: mouseArea
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.openProfile(userDelegate.userData.pubkey || "")
+                        onClicked: {
+                            if (userDelegate.userData && userDelegate.userData.pubkey) {
+                                root.openProfile(userDelegate.userData.pubkey)
+                            }
+                        }
                     }
                     
                     RowLayout {
@@ -300,8 +320,8 @@ Rectangle {
                         ProfileAvatar {
                             Layout.preferredWidth: 48
                             Layout.preferredHeight: 48
-                            imageUrl: userDelegate.userData.picture || ""
-                            name: userDelegate.userData.name || "?"
+                            imageUrl: (userDelegate.userData && userDelegate.userData.picture) || ""
+                            name: (userDelegate.userData && userDelegate.userData.name) || "?"
                         }
                         
                         // Info
@@ -310,45 +330,43 @@ Rectangle {
                             spacing: 2
                             
                             Text {
-                                text: userDelegate.userData.displayName || userDelegate.userData.name || "Unknown"
+                                text: (userDelegate.userData && (userDelegate.userData.displayName || userDelegate.userData.name)) || "Unknown"
                                 color: "#ffffff"
-                                font.pixelSize: 15
+                                font.pixelSize: 16
                                 font.weight: Font.Medium
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
                             
                             Text {
-                                visible: userDelegate.userData.nip05
-                                text: userDelegate.userData.nip05 || ""
+                                visible: userDelegate.userData && userDelegate.userData.nip05
+                                text: (userDelegate.userData && userDelegate.userData.nip05) || ""
                                 color: "#9333ea"
-                                font.pixelSize: 12
+                                font.pixelSize: 13
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
                             
                             Text {
-                                visible: userDelegate.userData.about
-                                text: (userDelegate.userData.about || "").substring(0, 100)
+                                visible: userDelegate.userData && userDelegate.userData.about
+                                text: ((userDelegate.userData && userDelegate.userData.about) || "").replace(/\n/g, " ")
                                 color: "#888888"
-                                font.pixelSize: 12
+                                font.pixelSize: 13
                                 elide: Text.ElideRight
+                                maximumLineCount: 1
                                 Layout.fillWidth: true
                             }
                         }
                         
-                        // Follow button placeholder
+                        // View button
                         Button {
                             text: "View"
                             implicitHeight: 32
                             
-                            ToolTip.visible: hovered
-                            ToolTip.text: "View profile"
-                            ToolTip.delay: 500
-                            
                             background: Rectangle {
-                                color: parent.pressed ? "#7c22c9" : "#9333ea"
+                                color: parent.down ? "#7c22c9" : "#9333ea"
                                 radius: 8
+                                opacity: parent.hovered ? 1.0 : 0.8
                             }
                             
                             contentItem: Text {
@@ -360,11 +378,12 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                             }
                             
-                            onClicked: root.openProfile(userDelegate.userData.pubkey || "")
+                            onClicked: root.openProfile((userDelegate.userData && userDelegate.userData.pubkey) || "")
                         }
                     }
                 }
             }
+
             
             // Note results
             ListView {
@@ -377,71 +396,46 @@ Rectangle {
                 
                 model: searchController ? searchController.note_count : 0
                 
-                delegate: Rectangle {
+                delegate: NoteCard {
                     id: noteDelegate
                     width: noteList.width
-                    height: contentColumn.height + 24
-                    color: noteMouseArea.containsMouse ? "#252525" : "#1a1a1a"
-                    radius: 12
+                    feedController: root.feedController
                     
-                    property var noteData: ({})
+                    Component.onCompleted: loadData()
                     
-                    Component.onCompleted: {
+                    function loadData() {
                         if (searchController) {
                             try {
                                 var json = searchController.get_note(index)
-                                noteData = JSON.parse(json)
+                                if (json) {
+                                    var note = JSON.parse(json)
+                                    noteId = note.id || ""
+                                    authorPubkey = note.pubkey || ""
+                                    authorName = note.authorName || "Unknown"
+                                    authorPicture = note.authorPicture || ""
+                                    content = note.content || ""
+                                    createdAt = note.createdAt || 0
+                                }
                             } catch (e) {
-                                noteData = {}
+                                console.log("Error parsing note data:", e)
                             }
                         }
                     }
                     
-                    MouseArea {
-                        id: noteMouseArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.openThread(noteDelegate.noteData.id || "")
+                    onNoteClicked: function(id) {
+                        root.openThread(id)
                     }
                     
-                    ColumnLayout {
-                        id: contentColumn
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 12
-                        spacing: 8
-                        
-                        // Author info
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-                            
-                            Text {
-                                text: noteDelegate.noteData.authorName || "Unknown"
-                                color: "#ffffff"
-                                font.pixelSize: 13
-                                font.weight: Font.Medium
-                            }
-                            
-                            Text {
-                                text: formatTimestamp(noteDelegate.noteData.createdAt || 0)
-                                color: "#666666"
-                                font.pixelSize: 12
-                            }
-                        }
-                        
-                        // Content
-                        Text {
-                            Layout.fillWidth: true
-                            text: noteDelegate.noteData.content || ""
-                            color: "#ffffff"
-                            font.pixelSize: 14
-                            wrapMode: Text.Wrap
-                            maximumLineCount: 4
-                            elide: Text.ElideRight
-                        }
+                    onAuthorClicked: function(pubkey) {
+                        root.openProfile(pubkey)
+                    }
+                    
+                    onLikeClicked: {
+                        if (root.feedController) root.feedController.like_note(noteId)
+                    }
+                    
+                    onRepostClicked: {
+                        if (root.feedController) root.feedController.repost_note(noteId)
                     }
                 }
             }
@@ -488,5 +482,26 @@ Rectangle {
         if (diff < 86400) return Math.floor(diff / 3600) + "h"
         if (diff < 604800) return Math.floor(diff / 86400) + "d"
         return date.toLocaleDateString()
+    }
+
+    // Debug Overlay
+    Rectangle {
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        width: 300
+        height: 150
+        color: "black"
+        opacity: 0.8
+        z: 9999
+        visible: true
+        Column {
+            anchors.centerIn: parent
+            spacing: 5
+            Text { color: "white"; text: "Controller: " + (searchController ? "OK" : "NULL") }
+            Text { color: "white"; text: "User Count: " + (searchController ? searchController.user_count : "?") }
+            Text { color: "white"; text: "Note Count: " + (searchController ? searchController.note_count : "?") }
+            Text { color: "white"; text: "Search Type: " + (searchController ? searchController.search_type : "?") }
+            Text { color: "white"; text: "Is Searching: " + (searchController ? searchController.is_searching : "?") }
+        }
     }
 }

@@ -2,6 +2,8 @@
 //!
 //! Provides functionality for zapping notes and profiles via LNURL
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -46,7 +48,7 @@ pub fn create_shared_nwc_manager() -> SharedNwcManager {
     Arc::new(Mutex::new(NwcManager::new()))
 }
 
-/// Global NWC manager instance
+// Global NWC manager instance
 lazy_static::lazy_static! {
     pub static ref GLOBAL_NWC_MANAGER: SharedNwcManager = create_shared_nwc_manager();
 }

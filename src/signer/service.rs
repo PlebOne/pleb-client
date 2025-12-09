@@ -3,6 +3,8 @@
 //! This exposes the same D-Bus interface as Pleb Signer, allowing other Nostr
 //! applications to use Pleb-Client for signing when it's running.
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;

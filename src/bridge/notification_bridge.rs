@@ -76,7 +76,6 @@ use std::pin::Pin;
 use cxx_qt_lib::QString;
 use cxx_qt::{CxxQtType, Threading};
 use nostr_sdk::prelude::*;
-use crate::nostr::relay::RelayManager;
 use crate::nostr::profile::ProfileCache;
 use crate::bridge::feed_bridge::create_authenticated_relay_manager;
 use std::collections::HashMap;
@@ -665,6 +664,8 @@ impl qobject::NotificationController {
             rust.unread_count = 0;
         }
         self.as_mut().set_unread_count(0);
+        // Signal UI to refresh so isRead changes are reflected
+        self.as_mut().notifications_updated();
     }
     
     /// Check for new notifications since the most recent one
@@ -818,7 +819,7 @@ impl qobject::NotificationController {
                         }
                         
                         let new_count = new_notifications.len() as i32;
-                        let new_unread = new_notifications.iter().filter(|n| !n.is_read).count() as i32;
+                        let _new_unread = new_notifications.iter().filter(|n| !n.is_read).count() as i32;
                         
                         // Get the newest timestamp from new notifications
                         let new_newest = new_notifications.first().map(|n| n.created_at);

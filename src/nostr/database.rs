@@ -7,6 +7,8 @@
 //! - Deduplication on ingest
 //! - Async-safe access patterns
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -137,7 +139,7 @@ impl NostrDbManager {
             .map_err(|e| format!("Failed to create database directory: {}", e))?;
         
         // Configure nostrdb
-        let mut config = Config::new();
+        let config = Config::new();
         config.set_ingester_threads(2);  // Async ingestion
         
         let ndb = Ndb::new(path.to_str().unwrap(), &config)
@@ -294,6 +296,27 @@ impl NostrDbManager {
         cache.get_profile(pubkey)
             .map(|p| !p.is_stale())
             .unwrap_or(false)
+    }
+    
+    /// Search profiles in memory cache by name/display_name/nip05
+    pub fn search_profiles(&self, query: &str) -> Vec<CachedProfile> {
+        let query_lower = query.to_lowercase();
+        let cache = self.memory_cache.read();
+        
+        cache.profiles.values()
+            .filter(|p| {
+                p.name.as_ref().map(|n| n.to_lowercase().contains(&query_lower)).unwrap_or(false)
+                    || p.display_name.as_ref().map(|n| n.to_lowercase().contains(&query_lower)).unwrap_or(false)
+                    || p.nip05.as_ref().map(|n| n.to_lowercase().contains(&query_lower)).unwrap_or(false)
+            })
+            .cloned()
+            .collect()
+    }
+    
+    /// Get count of cached profiles
+    pub fn profile_count(&self) -> usize {
+        let cache = self.memory_cache.read();
+        cache.profiles.len()
     }
     
     /// Get pubkeys that need profile refresh

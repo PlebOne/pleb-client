@@ -105,7 +105,7 @@ use nostr_sdk::prelude::*;
 use tokio::sync::Mutex;
 
 use crate::signer::SignerClient;
-use crate::nostr::dm::{DmManager, DmMessage, DmConversation, DmProtocol, ConversationCategory, fetch_nip04_dms, get_nip04_peer, format_pubkey_short};
+use crate::nostr::dm::{DmManager, DmMessage, DmProtocol, ConversationCategory, fetch_nip04_dms, get_nip04_peer, format_pubkey_short};
 use crate::nostr::relay::DEFAULT_TIMEOUT;
 use crate::nostr::profile::ProfileCache;
 
@@ -226,7 +226,7 @@ impl qobject::DmController {
         tracing::info!("DmController initialized");
     }
 
-    pub fn load_conversations(mut self: Pin<&mut Self>) {
+    pub fn load_conversations(self: Pin<&mut Self>) {
         self.load_conversations_with_cache(false);
     }
     
@@ -748,7 +748,7 @@ impl qobject::DmController {
         self.as_mut().messages_updated();
     }
     
-    pub fn toggle_protocol(mut self: Pin<&mut Self>) {
+    pub fn toggle_protocol(self: Pin<&mut Self>) {
         let mut rust = self.rust_mut();
         rust.current_protocol = match rust.current_protocol {
             DmProtocol::Nip04 => DmProtocol::Nip17,
@@ -764,13 +764,14 @@ impl qobject::DmController {
         }
     }
     
-    pub fn refresh(mut self: Pin<&mut Self>) {
+    pub fn refresh(self: Pin<&mut Self>) {
         tracing::info!("Refreshing DMs (forcing network fetch)...");
         self.load_conversations_with_cache(true);
     }
 }
 
 /// Set the signer client for DM encryption/decryption
+#[allow(dead_code)]
 pub fn set_dm_signer(signer: Option<SignerClient>) {
     DM_RUNTIME.block_on(async {
         let mut dm_signer = DM_SIGNER.lock().await;

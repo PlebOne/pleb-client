@@ -1,5 +1,7 @@
 //! Feed manager - orchestrates fetching and caching of different feed types
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use std::sync::Arc;
 use nostr_sdk::prelude::*;
 use tokio::sync::RwLock;
@@ -16,6 +18,10 @@ pub enum FeedType {
     Replies,
     /// Global feed - everything
     Global,
+    /// Long-form posts from followed users
+    ReadsFollowing,
+    /// Global long-form posts
+    ReadsGlobal,
 }
 
 impl FeedType {
@@ -24,6 +30,8 @@ impl FeedType {
             "following" => FeedType::Following,
             "replies" => FeedType::Replies,
             "global" => FeedType::Global,
+            "reads_following" => FeedType::ReadsFollowing,
+            "reads_global" => FeedType::ReadsGlobal,
             _ => FeedType::Following,
         }
     }
@@ -33,6 +41,8 @@ impl FeedType {
             FeedType::Following => "following",
             FeedType::Replies => "replies",
             FeedType::Global => "global",
+            FeedType::ReadsFollowing => "reads_following",
+            FeedType::ReadsGlobal => "reads_global",
         }
     }
 }
@@ -42,6 +52,7 @@ impl FeedType {
 pub struct DisplayNote {
     pub id: String,
     pub pubkey: String,
+    pub kind: u16,  // Event kind (1 = text note, 30023 = long-form)
     pub author_name: String,
     pub author_picture: Option<String>,
     pub author_nip05: Option<String>,
@@ -60,6 +71,12 @@ pub struct DisplayNote {
     pub is_repost: bool,
     pub repost_author_name: Option<String>,
     pub repost_author_picture: Option<String>,
+    // NIP-23 fields
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub image: Option<String>,
+    pub published_at: Option<i64>,
+    pub d_tag: Option<String>,  // NIP-23 unique identifier/slug
 }
 
 impl DisplayNote {
@@ -67,7 +84,8 @@ impl DisplayNote {
     pub fn from_event(event: &Event, profile: Option<&ProfileCache>) -> Self {
         let id = event.id.to_hex();
         let pubkey = event.pubkey.to_hex();
-        let created_at = event.created_at.as_u64() as i64;
+        let kind = event.kind.as_u16();
+        let created_at = event.created_at.as_secs() as i64;
         
         // Check if this is a repost (kind 6)
         let is_repost = event.kind == Kind::Repost;
@@ -116,9 +134,33 @@ impl DisplayNote {
             (None, None)
         };
         
+        // Extract NIP-23 fields
+        let mut title = None;
+        let mut summary = None;
+        let mut image = None;
+        let mut published_at = None;
+        let mut d_tag = None;
+
+        if event.kind == Kind::LongFormTextNote {
+            for tag in event.tags.iter() {
+                let tag_vec = tag.clone().to_vec();
+                if tag_vec.len() >= 2 {
+                    match tag_vec[0].as_str() {
+                        "d" => d_tag = Some(tag_vec[1].clone()),
+                        "title" => title = Some(tag_vec[1].clone()),
+                        "summary" => summary = Some(tag_vec[1].clone()),
+                        "image" => image = Some(tag_vec[1].clone()),
+                        "published_at" => published_at = tag_vec[1].parse().ok(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         Self {
             id,
             pubkey,
+            kind,
             author_name,
             author_picture,
             author_nip05,
@@ -137,6 +179,11 @@ impl DisplayNote {
             is_repost,
             repost_author_name,
             repost_author_picture,
+            title,
+            summary,
+            image,
+            published_at,
+            d_tag,
         }
     }
     
@@ -163,6 +210,10 @@ impl DisplayNote {
             "isRepost": self.is_repost,
             "repostAuthorName": self.repost_author_name,
             "repostAuthorPicture": self.repost_author_picture,
+            "title": self.title,
+            "summary": self.summary,
+            "image": self.image,
+            "publishedAt": self.published_at,
         }).to_string()
     }
 }
@@ -231,6 +282,8 @@ impl FeedManager {
             FeedType::Following => manager.fetch_following_feed(limit, None).await?,
             FeedType::Replies => manager.fetch_replies_feed(limit, None).await?,
             FeedType::Global => manager.fetch_global_feed(limit, None).await?,
+            FeedType::ReadsFollowing => manager.fetch_long_form_following(limit, None).await?,
+            FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, None).await?,
         };
         
         // Collect unique pubkeys for profile fetching
@@ -303,6 +356,8 @@ impl FeedManager {
             FeedType::Following => manager.fetch_following_feed(limit, until).await?,
             FeedType::Replies => manager.fetch_replies_feed(limit, until).await?,
             FeedType::Global => manager.fetch_global_feed(limit, until).await?,
+            FeedType::ReadsFollowing => manager.fetch_long_form_following(limit, until).await?,
+            FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, until).await?,
         };
         
         // Fetch profiles for new authors

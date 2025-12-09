@@ -150,12 +150,17 @@ ApplicationWindow {
             case "settings": return 6
             case "search": return 7
             case "relays": return 8
+            case "reads": return 9
+            case "article": return 10
             default: return 0
         }
     }
     
     // Track the note to show in thread view
     property string threadNoteId: ""
+    
+    // Track the article to show
+    property string articleNoteId: ""
     
     // Track the profile pubkey to view (if different from logged-in user)
     property string viewingProfilePubkey: ""
@@ -219,11 +224,21 @@ ApplicationWindow {
             displayName: appController.display_name
             profilePicture: appController.profile_picture
             walletBalance: appController.wallet_balance_sats
+            unreadNotifications: notificationController.unread_count
+            unreadMessages: dmController.unread_count
             
             onNavigate: function(screen) {
                 // Clear viewing profile pubkey when navigating to own profile via sidebar
                 if (screen === "profile") {
                     window.viewingProfilePubkey = ""
+                }
+                // Load reads_following feed when navigating to reads screen
+                if (screen === "reads") {
+                    feedController.load_feed("reads_following")
+                }
+                // Load regular following feed when navigating back to feed screen
+                if (screen === "feed" && feedController.current_feed.toString().startsWith("reads_")) {
+                    feedController.load_feed("following")
                 }
                 appController.navigate_to(screen)
             }
@@ -403,6 +418,7 @@ ApplicationWindow {
             // Search screen
             SearchScreen {
                 searchController: searchController
+                feedController: feedController
                 
                 onOpenProfile: function(pubkey) {
                     console.log("[DEBUG] Opening profile from search:", pubkey)
@@ -422,6 +438,44 @@ ApplicationWindow {
             // Relays screen
             RelaysScreen {
                 appController: appController
+            }
+            
+            // Reads screen
+            ReadsScreen {
+                feedController: feedController
+                appController: appController
+                
+                onOpenArticle: function(noteId) {
+                    console.log("Opening article:", noteId)
+                    window.previousScreen = "reads"
+                    window.articleNoteId = noteId
+                    appController.navigate_to("article")
+                }
+                
+                onOpenProfile: function(pubkey) {
+                    console.log("Opening profile from reads:", pubkey)
+                    window.previousScreen = "reads"
+                    window.viewingProfilePubkey = pubkey
+                    appController.navigate_to("profile")
+                }
+            }
+            
+            // Article screen
+            ArticleScreen {
+                feedController: feedController
+                appController: appController
+                noteId: window.articleNoteId
+                
+                onBackClicked: {
+                    appController.navigate_to(window.previousScreen)
+                }
+                
+                onOpenProfile: function(pubkey) {
+                    console.log("Opening profile from article:", pubkey)
+                    window.previousScreen = "article"
+                    window.viewingProfilePubkey = pubkey
+                    appController.navigate_to("profile")
+                }
             }
         }
     }

@@ -40,6 +40,9 @@ fn main() {
                 "qml/screens/NotificationsScreen.qml",
                 "qml/screens/SearchScreen.qml",
                 "qml/screens/RelaysScreen.qml",
+                "qml/screens/ReadsScreen.qml",
+                "qml/screens/ArticleScreen.qml",
+                "qml/components/ArticleCard.qml",
             ],
             ..Default::default()
         })

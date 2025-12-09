@@ -3,6 +3,8 @@
 //! NIP-04: Legacy encrypted direct messages (kind 4)
 //! NIP-17: Private Direct Messages with Gift Wrap (kind 1059)
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use nostr_sdk::prelude::*;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -474,9 +476,9 @@ fn truncate_message(content: &str, max_len: usize) -> String {
 /// Format a hex pubkey as npub for display
 pub fn format_pubkey_short(pubkey: &str) -> String {
     if let Ok(pk) = PublicKey::parse(pubkey) {
-        if let Ok(npub) = pk.to_bech32() {
-            return format!("{}...{}", &npub[..12], &npub[npub.len()-6..]);
-        }
+        // to_bech32() is infallible for PublicKey
+        let npub = pk.to_bech32().expect("bech32 encoding");
+        return format!("{}...{}", &npub[..12], &npub[npub.len()-6..]);
     }
     format!("{}...{}", &pubkey[..8], &pubkey[pubkey.len()-6..])
 }

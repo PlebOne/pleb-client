@@ -195,7 +195,7 @@ use nostr_sdk::prelude::*;
 use tokio::sync::Mutex;
 use crate::nostr::{
     database::NostrDbManager,
-    relay::{RelayManager, SharedRelayManager, create_shared_relay_manager},
+    relay::RelayManager,
     feed::DisplayNote,
     profile::ProfileCache,
     blossom,
@@ -211,6 +211,8 @@ pub enum FeedType {
     Following, // Just posts from following (no replies)
     Replies,   // Combined following + replies (home experience)
     Global,
+    ReadsFollowing,
+    ReadsGlobal,
 }
 
 impl FeedType {
@@ -219,14 +221,18 @@ impl FeedType {
             "following" => FeedType::Following,
             "replies" => FeedType::Replies,
             "global" => FeedType::Global,
+            "reads_following" => FeedType::ReadsFollowing,
+            "reads_global" => FeedType::ReadsGlobal,
             _ => FeedType::Following,
         }
     }
 }
 
+// Use the global relay manager from relay module
+use crate::nostr::relay::GLOBAL_RELAY_MANAGER as RELAY_MANAGER;
+
 // Global state for async operations
 lazy_static::lazy_static! {
-    static ref RELAY_MANAGER: SharedRelayManager = create_shared_relay_manager();
     static ref FEED_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Runtime::new().unwrap();
     // Prefetched feed cache - keyed by feed type string
     static ref FEED_CACHE: std::sync::RwLock<std::collections::HashMap<String, Vec<DisplayNote>>> = 
@@ -263,6 +269,8 @@ fn prefetch_feed(feed_type: FeedType) {
         FeedType::Following => "following",
         FeedType::Replies => "replies",
         FeedType::Global => "global",
+        FeedType::ReadsFollowing => "reads_following",
+        FeedType::ReadsGlobal => "reads_global",
     };
     
     std::thread::spawn(move || {
@@ -279,6 +287,8 @@ fn prefetch_feed(feed_type: FeedType) {
                 FeedType::Following => manager.fetch_following_feed(limit, None).await?,
                 FeedType::Replies => manager.fetch_home_feed(limit, None).await?,
                 FeedType::Global => manager.fetch_global_feed(limit, None).await?,
+                FeedType::ReadsFollowing => manager.fetch_long_form_following(limit, None).await?,
+                FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, None).await?,
             };
             
             // Fetch profiles
@@ -305,6 +315,18 @@ fn prefetch_feed(feed_type: FeedType) {
                     let pubkey_hex = e.pubkey.to_hex();
                     let profile = profile_map.get(&pubkey_hex);
                     DisplayNote::from_event(e, profile)
+                })
+                .filter(|n| {
+                    // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
+                    if feed_type == FeedType::ReadsFollowing || feed_type == FeedType::ReadsGlobal {
+                        n.kind == 30023 
+                            && n.d_tag.is_some() 
+                            && !n.d_tag.as_ref().unwrap().is_empty()
+                            && n.title.is_some() 
+                            && !n.title.as_ref().unwrap().is_empty()
+                    } else {
+                        true
+                    }
                 })
                 .collect();
             
@@ -659,6 +681,8 @@ impl qobject::FeedController {
                     FeedType::Following => manager.fetch_following_feed(limit, None).await?,
                     FeedType::Replies => manager.fetch_home_feed(limit, None).await?,
                     FeedType::Global => manager.fetch_global_feed(limit, None).await?,
+                    FeedType::ReadsFollowing => manager.fetch_long_form_following(limit, None).await?,
+                    FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, None).await?,
                 };
                 
                 // Collect unique pubkeys for profile fetching
@@ -682,7 +706,7 @@ impl qobject::FeedController {
                 }
                 
                 // Convert to display notes
-                let notes: Vec<DisplayNote> = events
+                let all_notes: Vec<DisplayNote> = events
                     .iter()
                     .map(|e| {
                         let pubkey_hex = e.pubkey.to_hex();
@@ -690,6 +714,42 @@ impl qobject::FeedController {
                         DisplayNote::from_event(e, profile)
                     })
                     .collect();
+                
+                // Log what we're getting
+                let is_reads = feed == FeedType::ReadsFollowing || feed == FeedType::ReadsGlobal;
+                if is_reads {
+                    tracing::info!("Reads feed: got {} events total", all_notes.len());
+                    for (i, n) in all_notes.iter().take(10).enumerate() {
+                        tracing::info!("  Note {}: kind={}, d_tag={:?}, title={:?}", 
+                            i, n.kind, n.d_tag.as_ref().map(|s| s.chars().take(30).collect::<String>()), 
+                            n.title.as_ref().map(|s| s.chars().take(50).collect::<String>()));
+                    }
+                }
+                
+                let notes: Vec<DisplayNote> = all_notes
+                    .into_iter()
+                    .filter(|n| {
+                        // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
+                        if is_reads {
+                            let passes = n.kind == 30023 
+                                && n.d_tag.is_some() 
+                                && !n.d_tag.as_ref().unwrap().is_empty()
+                                && n.title.is_some() 
+                                && !n.title.as_ref().unwrap().is_empty();
+                            if !passes {
+                                tracing::debug!("Filtered out: kind={}, has_d_tag={}, has_title={}", 
+                                    n.kind, n.d_tag.is_some(), n.title.is_some());
+                            }
+                            passes
+                        } else {
+                            true
+                        }
+                    })
+                    .collect();
+                
+                if is_reads {
+                    tracing::info!("Reads feed: {} notes passed filter", notes.len());
+                }
                 
                 Ok(notes)
             });
@@ -801,10 +861,18 @@ impl qobject::FeedController {
                     FeedType::Following => manager.fetch_following_feed(limit, until).await?,
                     FeedType::Replies => manager.fetch_home_feed(limit, until).await?,
                     FeedType::Global => manager.fetch_global_feed(limit, until).await?,
+                    FeedType::ReadsFollowing => manager.fetch_long_form_following(limit, until).await?,
+                    FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, until).await?,
                 };
                 
                 tracing::info!("Fetched {} older events for {} feed", events.len(), 
-                    match feed { FeedType::Following => "following", FeedType::Replies => "replies", FeedType::Global => "global" });
+                    match feed { 
+                        FeedType::Following => "following", 
+                        FeedType::Replies => "replies", 
+                        FeedType::Global => "global",
+                        FeedType::ReadsFollowing => "reads_following",
+                        FeedType::ReadsGlobal => "reads_global",
+                    });
                 
                 // Fetch profiles for new authors
                 let pubkeys: Vec<PublicKey> = events
@@ -830,6 +898,18 @@ impl qobject::FeedController {
                         let pubkey_hex = e.pubkey.to_hex();
                         let profile = profile_map.get(&pubkey_hex);
                         DisplayNote::from_event(e, profile)
+                    })
+                    .filter(|n| {
+                        // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
+                        if feed == FeedType::ReadsFollowing || feed == FeedType::ReadsGlobal {
+                            n.kind == 30023 
+                                && n.d_tag.is_some() 
+                                && !n.d_tag.as_ref().unwrap().is_empty()
+                                && n.title.is_some() 
+                                && !n.title.as_ref().unwrap().is_empty()
+                        } else {
+                            true
+                        }
                     })
                     .collect();
                 
@@ -1013,7 +1093,7 @@ impl qobject::FeedController {
     
     /// Check for new notes since the latest one we have
     /// This fetches new notes and prepends them without clearing the existing feed
-    pub fn check_for_new(mut self: Pin<&mut Self>) {
+    pub fn check_for_new(self: Pin<&mut Self>) {
         if *self.is_loading() {
             tracing::warn!("check_for_new called while already loading, ignoring");
             return;
@@ -1061,6 +1141,8 @@ impl qobject::FeedController {
                     FeedType::Following => manager.fetch_following_feed(limit, None).await?,
                     FeedType::Replies => manager.fetch_home_feed(limit, None).await?,
                     FeedType::Global => manager.fetch_global_feed(limit, None).await?,
+                    FeedType::ReadsFollowing => manager.fetch_long_form_following(limit, None).await?,
+                    FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, None).await?,
                 };
                 
                 tracing::debug!("check_for_new: fetched {} events from relays", events.len());
@@ -1068,14 +1150,14 @@ impl qobject::FeedController {
                 // Log some timestamps for debugging
                 for (i, e) in events.iter().take(5).enumerate() {
                     tracing::debug!("  event {}: ts={}, newest_ts={}, newer={}", 
-                        i, e.created_at.as_u64(), newest_timestamp,
-                        e.created_at.as_u64() as i64 > newest_timestamp);
+                        i, e.created_at.as_secs(), newest_timestamp,
+                        e.created_at.as_secs() as i64 > newest_timestamp);
                 }
                 
                 // Filter to only notes newer than our newest
                 let new_events: Vec<_> = events
                     .iter()
-                    .filter(|e| e.created_at.as_u64() as i64 > newest_timestamp)
+                    .filter(|e| e.created_at.as_secs() as i64 > newest_timestamp)
                     .cloned()
                     .collect();
                 
@@ -1109,6 +1191,18 @@ impl qobject::FeedController {
                         let pubkey_hex = e.pubkey.to_hex();
                         let profile = profile_map.get(&pubkey_hex);
                         DisplayNote::from_event(e, profile)
+                    })
+                    .filter(|n| {
+                        // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
+                        if feed == FeedType::ReadsFollowing || feed == FeedType::ReadsGlobal {
+                            n.kind == 30023 
+                                && n.d_tag.is_some() 
+                                && !n.d_tag.as_ref().unwrap().is_empty()
+                                && n.title.is_some() 
+                                && !n.title.as_ref().unwrap().is_empty()
+                        } else {
+                            true
+                        }
                     })
                     .collect();
             
@@ -2482,6 +2576,7 @@ async fn fetch_og_metadata(url: &str) -> Result<String, String> {
 }
 
 /// Set the signer client for feed operations
+#[allow(dead_code)]
 pub fn set_feed_signer(signer: Option<SignerClient>) {
     FEED_RUNTIME.block_on(async {
         let mut feed_signer = FEED_SIGNER.lock().await;
@@ -2496,6 +2591,7 @@ pub fn set_feed_nsec(nsec: Option<String>) {
 }
 
 /// Get the nsec for creating relay managers in other bridges
+#[allow(dead_code)]
 pub fn get_feed_nsec() -> Option<String> {
     FEED_NSEC.read().unwrap().clone()
 }

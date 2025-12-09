@@ -1,6 +1,8 @@
 //! Blossom protocol implementation for media uploads
 //! See: https://github.com/hzrd149/blossom
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use nostr_sdk::prelude::*;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -60,7 +62,7 @@ pub async fn upload_media(
         .unwrap_or("file");
     
     let now = Timestamp::now();
-    let expiration = Timestamp::from(now.as_u64() + 300); // 5 minutes
+    let expiration = Timestamp::from(now.as_secs() + 300); // 5 minutes
     
     // Build the authorization event
     // Blossom uses kind 24242 for upload auth

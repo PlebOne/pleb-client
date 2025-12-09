@@ -10,6 +10,8 @@ Rectangle {
     property string displayName: ""
     property string profilePicture: ""
     property int walletBalance: 0
+    property int unreadNotifications: 0
+    property int unreadMessages: 0
     
     signal navigate(string screen)
     
@@ -47,6 +49,7 @@ Rectangle {
         Repeater {
             model: [
                 { icon: "🏠", label: "Feed", screen: "feed" },
+                { icon: "📖", label: "Reads", screen: "reads" },
                 { icon: "🔍", label: "Search", screen: "search" },
                 { icon: "🔔", label: "Notifications", screen: "notifications" },
                 { icon: "✉️", label: "Messages", screen: "messages" },
@@ -60,6 +63,13 @@ Rectangle {
                 Layout.preferredHeight: 44
                 radius: 8
                 color: currentScreen === modelData.screen ? "#9333ea" : "transparent"
+                
+                // Helper to get badge count for this item
+                property int badgeCount: {
+                    if (modelData.screen === "notifications") return root.unreadNotifications
+                    if (modelData.screen === "messages") return root.unreadMessages
+                    return 0
+                }
                 
                 ToolTip.visible: navMouseArea.containsMouse && navMouseArea.pressedButtons === 0
                 ToolTip.text: modelData.label + " (Ctrl+" + (index + 1) + ")"
@@ -101,6 +111,23 @@ Rectangle {
                         color: "#ffffff"
                         font.pixelSize: 14
                         Layout.fillWidth: true
+                    }
+                    
+                    // Unread badge
+                    Rectangle {
+                        visible: badgeCount > 0
+                        Layout.preferredWidth: badgeCount > 99 ? 28 : 22
+                        Layout.preferredHeight: 22
+                        radius: 11
+                        color: "#dc2626"
+                        
+                        Text {
+                            anchors.centerIn: parent
+                            text: badgeCount > 99 ? "99+" : badgeCount.toString()
+                            color: "#ffffff"
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                        }
                     }
                 }
             }

@@ -1,5 +1,7 @@
 //! Relay manager - handles connections to Nostr relays using nostr-sdk
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use std::sync::Arc;
 use std::time::Duration;
 use nostr_sdk::prelude::*;
@@ -331,6 +333,37 @@ impl RelayManager {
             .fetch_events(reply_filter, DEFAULT_TIMEOUT)
             .await
             .map_err(|e| format!("Failed to fetch replies: {}", e))
+    }
+
+    /// Fetch long-form notes (kind 30023) from followed users
+    pub async fn fetch_long_form_following(&self, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        if self.following.is_empty() {
+            return Ok(Events::default());
+        }
+        
+        let mut filter = Filter::new()
+            .kind(Kind::LongFormTextNote)
+            .authors(self.following.clone())
+            .limit(limit as usize);
+            
+        if let Some(ts) = until {
+            filter = filter.until(ts);
+        }
+        
+        self.client.fetch_events(filter, DEFAULT_TIMEOUT).await.map_err(|e| e.to_string())
+    }
+
+    /// Fetch global long-form notes
+    pub async fn fetch_long_form_global(&self, limit: u64, until: Option<Timestamp>) -> Result<Events, String> {
+        let mut filter = Filter::new()
+            .kind(Kind::LongFormTextNote)
+            .limit(limit as usize);
+            
+        if let Some(ts) = until {
+            filter = filter.until(ts);
+        }
+        
+        self.client.fetch_events(filter, DEFAULT_TIMEOUT).await.map_err(|e| e.to_string())
     }
     
     /// Fetch global feed (all text notes)
@@ -709,6 +742,12 @@ pub type SharedRelayManager = Arc<RwLock<Option<RelayManager>>>;
 /// Create a shared relay manager instance
 pub fn create_shared_relay_manager() -> SharedRelayManager {
     Arc::new(RwLock::new(None))
+}
+
+// Global relay manager - shared across all bridges
+lazy_static::lazy_static! {
+    /// Global relay manager instance shared by all bridges
+    pub static ref GLOBAL_RELAY_MANAGER: SharedRelayManager = create_shared_relay_manager();
 }
 
 /// Extract amount in millisatoshis from a BOLT11 invoice string

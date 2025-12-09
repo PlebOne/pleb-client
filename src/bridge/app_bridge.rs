@@ -797,6 +797,7 @@ fn parse_nsec(nsec: &str) -> Result<(String, String, String), String> {
 }
 
 /// Format a hex public key as npub
+#[allow(dead_code)]
 fn format_npub(hex_pubkey: &str) -> String {
     use nostr_sdk::prelude::*;
     

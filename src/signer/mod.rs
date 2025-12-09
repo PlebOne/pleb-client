@@ -8,4 +8,3 @@ pub mod client;
 pub mod service;
 
 pub use client::SignerClient;
-pub use service::SignerService;

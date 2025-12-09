@@ -1,5 +1,7 @@
 //! Profile cache - stores and retrieves user profile metadata
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use nostr_sdk::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -7,8 +7,6 @@ use std::pin::Pin;
 
 use nostr_sdk::{Filter, Kind};
 
-use crate::nostr::relay::{SharedRelayManager, create_shared_relay_manager};
-
 #[cxx_qt::bridge]
 mod ffi {
     unsafe extern "C++" {
@@ -58,11 +56,14 @@ mod ffi {
 
 use cxx_qt::Threading;
 
-// Global state
+// Use global relay manager and local runtime
 lazy_static::lazy_static! {
-    static ref SEARCH_RELAY_MANAGER: SharedRelayManager = create_shared_relay_manager();
     static ref SEARCH_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Runtime::new().unwrap();
 }
+
+// Alias for cleaner code
+use crate::nostr::relay::GLOBAL_RELAY_MANAGER as SEARCH_RELAY_MANAGER;
+use crate::nostr::database::NostrDbManager;
 
 /// Search result types
 #[derive(Clone, Debug, Default)]
@@ -101,7 +102,9 @@ pub struct SearchControllerRust {
 impl ffi::SearchController {
     pub fn search_users(mut self: Pin<&mut Self>, query: &QString) {
         let query_str = query.to_string();
+        println!("[Search] search_users called with query: '{}'", query_str);
         if query_str.trim().is_empty() {
+            println!("[Search] Empty query, returning");
             return;
         }
         
@@ -121,68 +124,119 @@ impl ffi::SearchController {
         let qt_thread = self.qt_thread();
         
         std::thread::spawn(move || {
-            let result = SEARCH_RUNTIME.block_on(async {
-                let rm = SEARCH_RELAY_MANAGER.read().unwrap();
-                let Some(manager) = rm.as_ref() else {
-                    return Err("Relay manager not initialized".to_string());
-                };
-                
+            println!("[Search] Background thread started");
+            let result: Result<Vec<UserResult>, String> = SEARCH_RUNTIME.block_on(async {
                 let mut results = Vec::new();
+                let mut seen_pubkeys = std::collections::HashSet::new();
                 
-                // Fetch recent metadata events
-                let filter = Filter::new()
-                    .kind(Kind::Metadata)
-                    .limit(200);
-                
-                if let Ok(events) = manager.client().fetch_events(filter, std::time::Duration::from_secs(10)).await {
-                    for event in events {
-                        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&event.content) {
-                            let name = metadata.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            let display_name = metadata.get("display_name").and_then(|n| n.as_str()).unwrap_or("");
-                            let nip05 = metadata.get("nip05").and_then(|n| n.as_str()).unwrap_or("");
-                            
-                            let name_lower = name.to_lowercase();
-                            let display_lower = display_name.to_lowercase();
-                            let nip05_lower = nip05.to_lowercase();
-                            
-                            if name_lower.contains(&query_lower) 
-                                || display_lower.contains(&query_lower)
-                                || nip05_lower.contains(&query_lower) 
-                            {
-                                results.push(UserResult {
-                                    pubkey: event.pubkey.to_hex(),
-                                    name: name.to_string(),
-                                    display_name: display_name.to_string(),
-                                    picture: metadata.get("picture").and_then(|p| p.as_str()).unwrap_or("").to_string(),
-                                    nip05: nip05.to_string(),
-                                    about: metadata.get("about").and_then(|a| a.as_str()).unwrap_or("").to_string(),
-                                });
-                            }
+                // First, search local database cache
+                println!("[Search] Searching local cache...");
+                if let Ok(db) = NostrDbManager::global() {
+                    let cached_count = db.profile_count();
+                    println!("[Search] Local cache has {} profiles", cached_count);
+                    
+                    let local_results = db.search_profiles(&query_lower);
+                    println!("[Search] Found {} matches in local cache", local_results.len());
+                    
+                    for profile in local_results {
+                        if seen_pubkeys.insert(profile.pubkey.clone()) {
+                            results.push(UserResult {
+                                pubkey: profile.pubkey,
+                                name: profile.name.unwrap_or_default(),
+                                display_name: profile.display_name.unwrap_or_default(),
+                                picture: profile.picture.unwrap_or_default(),
+                                nip05: profile.nip05.unwrap_or_default(),
+                                about: profile.about.unwrap_or_default(),
+                            });
                         }
                     }
                 }
                 
+                // Then fetch from relays to find more
+                let rm = SEARCH_RELAY_MANAGER.read().unwrap();
+                if let Some(manager) = rm.as_ref() {
+                    println!("[Search] Fetching from relays (limit 500)...");
+                    
+                    // Fetch more metadata events with a larger limit
+                    let filter = Filter::new()
+                        .kind(Kind::Metadata)
+                        .limit(500);
+                    
+                    match manager.client().fetch_events(filter, std::time::Duration::from_secs(15)).await {
+                        Ok(events) => {
+                            println!("[Search] Fetched {} metadata events from relays", events.len());
+                            let mut relay_matches = 0;
+                            
+                            for event in events {
+                                // Store in local cache for future searches
+                                if let Ok(db) = NostrDbManager::global() {
+                                    let _ = db.ingest_profile(&event);
+                                }
+                                
+                                if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&event.content) {
+                                    let name = metadata.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let display_name = metadata.get("display_name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let nip05 = metadata.get("nip05").and_then(|n| n.as_str()).unwrap_or("");
+                                    
+                                    let name_lower = name.to_lowercase();
+                                    let display_lower = display_name.to_lowercase();
+                                    let nip05_lower = nip05.to_lowercase();
+                                    
+                                    let pubkey = event.pubkey.to_hex();
+                                    
+                                    if (name_lower.contains(&query_lower) 
+                                        || display_lower.contains(&query_lower)
+                                        || nip05_lower.contains(&query_lower))
+                                        && seen_pubkeys.insert(pubkey.clone())
+                                    {
+                                        relay_matches += 1;
+                                        results.push(UserResult {
+                                            pubkey,
+                                            name: name.to_string(),
+                                            display_name: display_name.to_string(),
+                                            picture: metadata.get("picture").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+                                            nip05: nip05.to_string(),
+                                            about: metadata.get("about").and_then(|a| a.as_str()).unwrap_or("").to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                            println!("[Search] Found {} new matches from relays", relay_matches);
+                        }
+                        Err(e) => {
+                            println!("[Search] ERROR fetching events: {:?}", e);
+                        }
+                    }
+                } else {
+                    println!("[Search] WARNING: Relay manager not available");
+                }
+                
+                println!("[Search] Total results: {}", results.len());
                 Ok(results)
             });
             
+            println!("[Search] Search result: {:?}", result.as_ref().map(|r| r.len()));
             let _ = qt_thread.queue(move |mut qobject| {
+                println!("[Search] Qt thread callback EXECUTING");
                 match result {
                     Ok(results) => {
                         let count = results.len() as i32;
+                        println!("[Search] Setting user_count to {}", count);
                         {
                             let mut rust = qobject.as_mut().rust_mut();
                             rust.user_results = results;
-                            rust.user_count = count;
-                            rust.is_searching = false;
                         }
+                        // Set properties through the setter methods to trigger QML notifications
                         qobject.as_mut().set_user_count(count);
                         qobject.as_mut().set_is_searching(false);
+                        println!("[Search] Emitting search_completed signal");
                         qobject.as_mut().search_completed();
+                        println!("[Search] Qt thread callback DONE, user_count should be {}", count);
                     }
                     Err(e) => {
-                        qobject.as_mut().rust_mut().is_searching = false;
+                        println!("[Search] Error in callback: {}", e);
                         qobject.as_mut().set_is_searching(false);
-                        qobject.as_mut().error_occurred(QString::from(&e));
+                        qobject.as_mut().error_occurred(QString::from(e.as_str()));
                     }
                 }
             });
@@ -229,11 +283,22 @@ impl ffi::SearchController {
                         let content_lower = event.content.to_lowercase();
                         
                         if content_lower.contains(&query_lower) {
+                            let mut author_name = String::new();
+                            let mut author_picture = String::new();
+                            
+                            // Try to resolve author profile
+                            if let Ok(db) = NostrDbManager::global() {
+                                if let Some(profile) = db.get_profile(&event.pubkey.to_hex()) {
+                                    author_name = profile.display_name.or(profile.name).unwrap_or_default();
+                                    author_picture = profile.picture.unwrap_or_default();
+                                }
+                            }
+
                             results.push(NoteResult {
                                 id: event.id.to_hex(),
                                 pubkey: event.pubkey.to_hex(),
-                                author_name: String::new(),
-                                author_picture: String::new(),
+                                author_name,
+                                author_picture,
                                 content: event.content.clone(),
                                 created_at: event.created_at.as_secs() as i64,
                             });
@@ -311,11 +376,22 @@ impl ffi::SearchController {
                 
                 if let Ok(events) = manager.client().fetch_events(filter, std::time::Duration::from_secs(15)).await {
                     for event in events {
+                        let mut author_name = String::new();
+                        let mut author_picture = String::new();
+                        
+                        // Try to resolve author profile
+                        if let Ok(db) = NostrDbManager::global() {
+                            if let Some(profile) = db.get_profile(&event.pubkey.to_hex()) {
+                                author_name = profile.display_name.or(profile.name).unwrap_or_default();
+                                author_picture = profile.picture.unwrap_or_default();
+                            }
+                        }
+
                         results.push(NoteResult {
                             id: event.id.to_hex(),
                             pubkey: event.pubkey.to_hex(),
-                            author_name: String::new(),
-                            author_picture: String::new(),
+                            author_name,
+                            author_picture,
                             content: event.content.clone(),
                             created_at: event.created_at.as_secs() as i64,
                         });
@@ -350,7 +426,9 @@ impl ffi::SearchController {
     }
     
     pub fn get_user(&self, index: i32) -> QString {
+        println!("[Search] get_user called for index {}", index);
         if index < 0 || index as usize >= self.user_results.len() {
+            println!("[Search] get_user index out of bounds or results empty");
             return QString::from("{}");
         }
         

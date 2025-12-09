@@ -3,6 +3,8 @@
 //! Uses Argon2 for key derivation and ChaCha20-Poly1305 for encryption.
 //! Credentials are stored in an encrypted file in the user's data directory.
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use std::fs;
 use std::path::PathBuf;
 use argon2::Argon2;

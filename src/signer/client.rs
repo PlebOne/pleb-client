@@ -3,6 +3,8 @@
 //! This client connects to an external Pleb Signer instance running on the system
 //! to perform signing operations without handling private keys directly.
 
+#![allow(dead_code)]  // Planned infrastructure for future integration
+
 use serde::{Deserialize, Serialize};
 use zbus::{Connection, Proxy};
 

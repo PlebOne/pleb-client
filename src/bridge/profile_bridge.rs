@@ -113,16 +113,32 @@ pub mod qobject {
 }
 
 use std::pin::Pin;
+use std::sync::RwLock;
 use cxx_qt_lib::QString;
 use cxx_qt::{CxxQtType, Threading};
 use nostr_sdk::prelude::*;
-use crate::nostr::relay::RelayManager;
 use crate::nostr::profile::ProfileCache;
 use crate::bridge::feed_bridge::create_authenticated_relay_manager;
 
 // Global tokio runtime for profile operations
 lazy_static::lazy_static! {
     static ref PROFILE_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Runtime::new().unwrap();
+}
+
+/// Cached logged-in user's profile data
+#[derive(Debug, Clone)]
+struct CachedOwnProfile {
+    pubkey: PublicKey,
+    profile: ProfileCache,
+    following_count: i32,
+    followers_count: i32,
+    following_list: Vec<ProfileListItem>,
+    followers_list: Vec<ProfileListItem>,
+}
+
+// Global cache for the logged-in user's profile
+lazy_static::lazy_static! {
+    static ref OWN_PROFILE_CACHE: RwLock<Option<CachedOwnProfile>> = RwLock::new(None);
 }
 
 /// Simple profile info for following/followers display
@@ -289,11 +305,51 @@ impl qobject::ProfileController {
         self.as_mut().set_public_key(QString::from(&target_pubkey.to_hex()));
         self.as_mut().set_is_own_profile(is_own);
         self.as_mut().set_is_following(is_following);
+        
+        // If this is own profile, check cache first
+        if is_own {
+            if let Ok(cache) = OWN_PROFILE_CACHE.read() {
+                if let Some(cached) = cache.as_ref() {
+                    if cached.pubkey == target_pubkey && !cached.profile.is_stale() {
+                        tracing::info!("Using cached own profile data");
+                        
+                        // Apply cached data immediately
+                        let p = &cached.profile;
+                        self.as_mut().set_name(QString::from(&p.name.clone().unwrap_or_default()));
+                        self.as_mut().set_display_name(QString::from(&p.display_name.clone().unwrap_or_default()));
+                        self.as_mut().set_about(QString::from(&p.about.clone().unwrap_or_default()));
+                        self.as_mut().set_picture(QString::from(&p.picture.clone().unwrap_or_default()));
+                        self.as_mut().set_banner(QString::from(&p.banner.clone().unwrap_or_default()));
+                        self.as_mut().set_website(QString::from(&p.website.clone().unwrap_or_default()));
+                        self.as_mut().set_nip05(QString::from(&p.nip05.clone().unwrap_or_default()));
+                        self.as_mut().set_lud16(QString::from(&p.lud16.clone().unwrap_or_default()));
+                        self.as_mut().set_following_count(cached.following_count);
+                        self.as_mut().set_followers_count(cached.followers_count);
+                        
+                        // Store the lists in rust state
+                        {
+                            let mut rust = self.as_mut().rust_mut();
+                            rust.following_list = cached.following_list.clone();
+                            rust.followers_list = cached.followers_list.clone();
+                        }
+                        
+                        self.as_mut().set_is_loading(false);
+                        self.as_mut().set_error_message(QString::from(""));
+                        self.as_mut().profile_loaded();
+                        
+                        // Return early - no need to fetch from network
+                        return;
+                    }
+                }
+            }
+        }
+        
         self.as_mut().set_is_loading(true);
         
         // Get qt_thread for UI updates
         let qt_thread = self.qt_thread();
         let pk = target_pubkey.clone();
+        let is_own_for_cache = is_own;
         
         // Spawn background thread - non-blocking
         std::thread::spawn(move || {
@@ -340,6 +396,23 @@ impl qobject::ProfileController {
                             nip05: None,
                         })
                         .collect();
+                    
+                    // Cache the profile if it's own profile
+                    if is_own_for_cache {
+                        if let Some(ref p) = profile {
+                            if let Ok(mut cache) = OWN_PROFILE_CACHE.write() {
+                                *cache = Some(CachedOwnProfile {
+                                    pubkey: target_pubkey.clone(),
+                                    profile: p.clone(),
+                                    following_count,
+                                    followers_count,
+                                    following_list: following_items.clone(),
+                                    followers_list: followers_items.clone(),
+                                });
+                                tracing::info!("Cached own profile data");
+                            }
+                        }
+                    }
                     
                     let _ = qt_thread.queue(move |mut qobject| {
                         {
@@ -388,7 +461,7 @@ impl qobject::ProfileController {
     }
     
     /// Reload current profile
-    pub fn reload(mut self: Pin<&mut Self>) {
+    pub fn reload(self: Pin<&mut Self>) {
         let pubkey = {
             self.as_ref().target_pubkey.clone()
         };
@@ -423,7 +496,7 @@ impl qobject::ProfileController {
         self.as_mut().set_is_loading(true);
         
         // Build metadata
-        let metadata = Metadata::new()
+        let _metadata = Metadata::new()
             .name(&name.to_string())
             .display_name(&display_name.to_string())
             .about(&about.to_string())
@@ -445,6 +518,45 @@ impl qobject::ProfileController {
         self.as_mut().set_lud16(lud16.clone());
         self.as_mut().set_is_loading(false);
         self.as_mut().profile_updated();
+        
+        // Update the cache with new profile data
+        if let Some(ref target_pk) = self.as_ref().target_pubkey {
+            if let Ok(mut cache) = OWN_PROFILE_CACHE.write() {
+                let (following_list, followers_list, following_count, followers_count) = {
+                    let rust = self.as_ref();
+                    (
+                        rust.following_list.clone(),
+                        rust.followers_list.clone(),
+                        rust.following_count,
+                        rust.followers_count,
+                    )
+                };
+                
+                let nip05_str = self.as_ref().nip05.to_string();
+                let new_profile = ProfileCache {
+                    name: Some(name.to_string()).filter(|s| !s.is_empty()),
+                    display_name: Some(display_name.to_string()).filter(|s| !s.is_empty()),
+                    about: Some(about.to_string()).filter(|s| !s.is_empty()),
+                    picture: Some(picture.to_string()).filter(|s| !s.is_empty()),
+                    banner: Some(banner.to_string()).filter(|s| !s.is_empty()),
+                    website: Some(website.to_string()).filter(|s| !s.is_empty()),
+                    nip05: if nip05_str.is_empty() { None } else { Some(nip05_str) },
+                    lud16: Some(lud16.to_string()).filter(|s| !s.is_empty()),
+                    lud06: None,
+                    cached_at: chrono::Utc::now().timestamp(),
+                };
+                
+                *cache = Some(CachedOwnProfile {
+                    pubkey: target_pk.clone(),
+                    profile: new_profile,
+                    following_count,
+                    followers_count,
+                    following_list,
+                    followers_list,
+                });
+                tracing::info!("Updated cached own profile after edit");
+            }
+        }
         
         tracing::info!("Profile updated locally (publishing not yet implemented)");
     }
