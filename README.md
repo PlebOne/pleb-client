@@ -4,13 +4,16 @@ A native Nostr client for Linux built with Qt/QML and Rust.
 
 ## Features
 
-- **Feeds**: Following, replies, and global timeline
-- **Direct Messages**: NIP-04 encrypted conversations
-- **Notifications**: Mentions, replies, zaps, and follows
-- **Profiles**: View and edit your profile
+- **Feeds**: Following, replies, and global timeline with reply/repost counts
+- **Reads**: Long-form articles (NIP-23) with rich content formatting
+- **Direct Messages**: NIP-04 encrypted conversations with categorized inbox
+- **Notifications**: Mentions, replies, zaps, and follows with polling updates
+- **Search**: Find users and notes across the network
+- **Profiles**: View and edit your profile, see followers/following
+- **Relays**: Manage relay connections with outbox model support
 - **Zaps**: Send zaps via Nostr Wallet Connect (NWC)
-- **Media**: Embedded images and video playback
-- **Keyboard Navigation**: Navigate feeds with j/k keys
+- **Media**: Embedded images, video playback, and link previews
+- **Keyboard Navigation**: Navigate feeds with j/k keys, vim-style shortcuts
 
 ## Installation
 
@@ -20,23 +23,23 @@ Download the latest release from the [releases page](https://github.com/PlebOne/
 
 **Tarball**
 ```bash
-tar xzf pleb-client-0.1.0-linux-x86_64.tar.gz
+tar xzf pleb-client-0.1.2-linux-x86_64.tar.gz
 ./pleb_client_qt
 ```
 
 **Debian/Ubuntu**
 ```bash
-sudo dpkg -i pleb-client_0.1.0_amd64.deb
+sudo dpkg -i pleb-client_0.1.2_amd64.deb
 ```
 
 **Fedora/RHEL**
 ```bash
-sudo dnf install pleb-client-0.1.0-1.fc43.x86_64.rpm
+sudo dnf install pleb-client-0.1.2-1.fc43.x86_64.rpm
 ```
 
 **Flatpak**
 ```bash
-flatpak install pleb-client-0.1.0.flatpak
+flatpak install one.pleb.PlebClient-0.1.2.flatpak
 ```
 
 ### Building from Source
@@ -78,9 +81,10 @@ Enter your nsec (private key) and set a password to encrypt it locally. The key 
 | j / Down | Next post |
 | k / Up | Previous post |
 | Enter | Open thread |
-| Escape | Back |
+| Escape | Back / Clear search |
 | r | Refresh feed |
 | n | New post |
+| / | Focus search |
 | ? | Show shortcuts |
 
 ### Wallet Connect
