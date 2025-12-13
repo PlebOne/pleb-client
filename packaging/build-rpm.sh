@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 PACKAGE_NAME="pleb-client"
 BUILD_DIR="build/rpm"
 
@@ -25,6 +25,12 @@ cd "$BUILD_DIR/SOURCES"
 tar czf "${PACKAGE_NAME}-${VERSION}.tar.gz" "${PACKAGE_NAME}-${VERSION}"
 rm -rf "${PACKAGE_NAME}-${VERSION}"
 cd -
+
+# Copy binary and resources to SOURCES for install step
+cp target/release/pleb_client_qt "$BUILD_DIR/SOURCES/"
+cp resources/pleb-client.desktop "$BUILD_DIR/SOURCES/"
+cp resources/icons/icon-256.png "$BUILD_DIR/SOURCES/"
+cp resources/icons/icon.svg "$BUILD_DIR/SOURCES/"
 
 # Copy spec file
 cp packaging/rpm/pleb-client.spec "$BUILD_DIR/SPECS/"

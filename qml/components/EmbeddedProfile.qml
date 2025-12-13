@@ -206,7 +206,7 @@ Rectangle {
                         color: "#666666"
                         font.pixelSize: 11
                         font.family: "monospace"
-                        visible: !profileData?.nip05 && profileData?.npub
+                        visible: !!(!profileData?.nip05 && profileData?.npub)
                     }
                 }
                 

@@ -1,5 +1,5 @@
 Name:           pleb-client
-Version:        0.1.2
+Version:        0.1.3
 Release:        1%{?dist}
 Summary:        A native Nostr client for Linux
 
@@ -36,6 +36,16 @@ install -m 644 %{_sourcedir}/icon.svg %{buildroot}/usr/share/icons/hicolor/scala
 /usr/share/icons/hicolor/scalable/apps/pleb-client.svg
 
 %changelog
+* Sat Dec 14 2024 PlebOne <contact@pleb.one> - 0.1.3-1
+- Add GIF support with Tenor search and privacy-preserving NIP-96 re-upload
+- Add Article Composer with drafts, zen mode, and markdown support
+- Add time range filtering to search (24h/7d/30d/90d)
+- Add fuzzy note search matching
+- Show reply-to author names on notes ("Replying to @user")
+- Fetch author profiles from relays during search for better results
+- Fix Unicode truncation panic in notifications
+- Performance improvements for profile fetching
+
 * Mon Dec 09 2024 PlebOne <contact@pleb.one> - 0.1.2-1
 - Add reply/repost counts to note stats display
 - Add feed filtering (Pictures, Replies, Reposts checkboxes)

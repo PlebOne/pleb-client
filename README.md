@@ -6,13 +6,15 @@ A native Nostr client for Linux built with Qt/QML and Rust.
 
 - **Feeds**: Following, replies, and global timeline with reply/repost counts
 - **Reads**: Long-form articles (NIP-23) with rich content formatting
+- **Article Composer**: Full-featured editor with drafts, zen mode, and markdown support
 - **Direct Messages**: NIP-04 encrypted conversations with categorized inbox
 - **Notifications**: Mentions, replies, zaps, and follows with polling updates
-- **Search**: Find users and notes across the network
+- **Search**: Find users and notes with fuzzy matching and time range filtering (24h/7d/30d/90d)
 - **Profiles**: View and edit your profile, see followers/following
 - **Relays**: Manage relay connections with outbox model support
 - **Zaps**: Send zaps via Nostr Wallet Connect (NWC)
-- **Media**: Embedded images, video playback, and link previews
+- **Media**: Embedded images, video playback, link previews, and animated GIFs
+- **GIF Support**: Search Tenor for GIFs with privacy-preserving re-upload to NIP-96 servers
 - **Keyboard Navigation**: Navigate feeds with j/k keys, vim-style shortcuts
 
 ## Installation
@@ -23,23 +25,23 @@ Download the latest release from the [releases page](https://github.com/PlebOne/
 
 **Tarball**
 ```bash
-tar xzf pleb-client-0.1.2-linux-x86_64.tar.gz
+tar xzf pleb-client-0.1.3-linux-x86_64.tar.gz
 ./pleb_client_qt
 ```
 
 **Debian/Ubuntu**
 ```bash
-sudo dpkg -i pleb-client_0.1.2_amd64.deb
+sudo dpkg -i pleb-client_0.1.3_amd64.deb
 ```
 
 **Fedora/RHEL**
 ```bash
-sudo dnf install pleb-client-0.1.2-1.fc43.x86_64.rpm
+sudo dnf install pleb-client-0.1.3-1.fc43.x86_64.rpm
 ```
 
 **Flatpak**
 ```bash
-flatpak install one.pleb.PlebClient-0.1.2.flatpak
+flatpak install one.pleb.PlebClient-0.1.3.flatpak
 ```
 
 ### Building from Source

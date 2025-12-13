@@ -1,6 +1,6 @@
 [package]
 name = "pleb_client_qt"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "A Linux Nostr client using Qt/QML and cxx-qt"
 license = "MIT"
@@ -51,7 +51,7 @@ parking_lot = "0.12"
 rand = "0.8"
 
 # HTTP client for link previews and media uploads
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "multipart"] }
 
 # Secure credential storage
 keyring = "3"
@@ -61,6 +61,9 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 mime_guess = "2"
+
+# URL-friendly slugs for article d-tags
+slug = "0.1"
 
 # Password-based encryption for credential storage
 argon2 = "0.5"

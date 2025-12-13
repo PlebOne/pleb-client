@@ -6,6 +6,12 @@ use std::path::PathBuf;
 /// Default Blossom server for media uploads
 pub const DEFAULT_BLOSSOM_SERVER: &str = "https://blossom.band";
 
+/// Default NIP-96 server for GIF re-uploads
+pub const DEFAULT_NIP96_SERVER: &str = "https://nostr.build";
+
+/// Default Tenor API key (Google Cloud API key with Tenor enabled)
+pub const DEFAULT_TENOR_API_KEY: &str = "AIzaSyD4aQNSMIkQlu4NWyIKgop-EGgcFFucZe4";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub relays: Vec<String>,
@@ -16,10 +22,24 @@ pub struct Config {
     pub show_global_feed: bool,
     #[serde(default = "default_blossom_server")]
     pub blossom_server: String,
+    /// Tenor API key (Google Cloud API key with Tenor enabled)
+    #[serde(default = "default_tenor_api_key")]
+    pub tenor_api_key: Option<String>,
+    /// NIP-96 server for re-uploading GIFs (privacy layer)
+    #[serde(default = "default_nip96_server")]
+    pub nip96_server: String,
 }
 
 fn default_blossom_server() -> String {
     DEFAULT_BLOSSOM_SERVER.to_string()
+}
+
+fn default_nip96_server() -> String {
+    DEFAULT_NIP96_SERVER.to_string()
+}
+
+fn default_tenor_api_key() -> Option<String> {
+    Some(DEFAULT_TENOR_API_KEY.to_string())
 }
 
 impl Default for Config {
@@ -37,6 +57,8 @@ impl Default for Config {
             auto_load_images: true,
             show_global_feed: true,
             blossom_server: DEFAULT_BLOSSOM_SERVER.to_string(),
+            tenor_api_key: Some(DEFAULT_TENOR_API_KEY.to_string()),
+            nip96_server: DEFAULT_NIP96_SERVER.to_string(),
         }
     }
 }

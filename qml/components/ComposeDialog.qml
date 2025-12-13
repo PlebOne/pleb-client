@@ -282,6 +282,33 @@ Popup {
                     onClicked: fileInputDialog.open()
                 }
                 
+                // GIF button
+                Button {
+                    implicitWidth: 44
+                    implicitHeight: 44
+                    enabled: !root.isUploading
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Add GIF"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: parent.pressed ? "#333333" : (parent.hovered ? "#252525" : "transparent")
+                        radius: 8
+                    }
+                    
+                    contentItem: Text {
+                        text: "GIF"
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                        color: parent.enabled ? "#ffffff" : "#666666"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: gifPicker.open()
+                }
+                
                 // Emoji button (placeholder)
                 Button {
                     implicitWidth: 44
@@ -387,6 +414,22 @@ Popup {
                 root.isUploading = true
                 root.feedController.upload_media(path)
             }
+        }
+    }
+    
+    // GIF picker
+    GifPicker {
+        id: gifPicker
+        feedController: root.feedController
+        
+        onGifSelected: function(url) {
+            // Add the GIF URL to content (it will display as an image)
+            if (composeInput.text.length > 0 && !composeInput.text.endsWith("\n")) {
+                composeInput.text += "\n\n"
+            }
+            composeInput.text += url
+            // Note: Don't add to attachedMedia since the URL is already in the text
+            // Adding to both would cause duplicate URLs in the post
         }
     }
     

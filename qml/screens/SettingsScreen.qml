@@ -432,6 +432,162 @@ Rectangle {
                                 }
                             }
                         }
+                        
+                        // GIF Settings (Tenor)
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: 1
+                            color: "#333333"
+                            Layout.topMargin: 16
+                            Layout.bottomMargin: 8
+                        }
+                        
+                        Text {
+                            text: "GIF Support (Tenor)"
+                            color: "#ffffff"
+                            font.pixelSize: 14
+                            font.weight: Font.Medium
+                        }
+                        
+                        Text {
+                            text: "Tenor API Key"
+                            color: "#888888"
+                            font.pixelSize: 12
+                            Layout.topMargin: 8
+                        }
+                        
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            
+                            TextField {
+                                id: tenorApiKeyInput
+                                Layout.fillWidth: true
+                                placeholderText: "Enter your Tenor/Google API key"
+                                echoMode: TextInput.Password
+                                color: "#ffffff"
+                                font.pixelSize: 14
+                                
+                                Component.onCompleted: {
+                                    // Check if key is configured
+                                    if (root.feedController && root.feedController.has_tenor_api_key()) {
+                                        text = "••••••••••••••••"
+                                    }
+                                }
+                                
+                                background: Rectangle {
+                                    color: "#0a0a0a"
+                                    radius: 8
+                                    border.color: tenorApiKeyInput.activeFocus ? "#9333ea" : "#333333"
+                                    border.width: 1
+                                }
+                                
+                                leftPadding: 12
+                                rightPadding: 12
+                                topPadding: 10
+                                bottomPadding: 10
+                            }
+                            
+                            Button {
+                                text: "Save"
+                                implicitWidth: 70
+                                implicitHeight: 40
+                                
+                                background: Rectangle {
+                                    color: parent.pressed ? "#7c22ce" : "#9333ea"
+                                    radius: 8
+                                }
+                                
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: "#ffffff"
+                                    font.pixelSize: 14
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                
+                                onClicked: {
+                                    if (root.feedController && tenorApiKeyInput.text !== "••••••••••••••••") {
+                                        root.feedController.set_tenor_api_key(tenorApiKeyInput.text.trim())
+                                        tenorApiKeyInput.text = "••••••••••••••••"
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Text {
+                            text: "Required for GIF search. Get a key from Google Cloud Console with Tenor API enabled."
+                            color: "#666666"
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
+                        
+                        Text {
+                            text: "NIP-96 Server (for GIF re-upload)"
+                            color: "#888888"
+                            font.pixelSize: 12
+                            Layout.topMargin: 12
+                        }
+                        
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            
+                            TextField {
+                                id: nip96ServerInput
+                                Layout.fillWidth: true
+                                placeholderText: "https://nostr.build"
+                                text: root.feedController ? root.feedController.get_nip96_server() : "https://nostr.build"
+                                color: "#ffffff"
+                                font.pixelSize: 14
+                                
+                                background: Rectangle {
+                                    color: "#0a0a0a"
+                                    radius: 8
+                                    border.color: nip96ServerInput.activeFocus ? "#9333ea" : "#333333"
+                                    border.width: 1
+                                }
+                                
+                                leftPadding: 12
+                                rightPadding: 12
+                                topPadding: 10
+                                bottomPadding: 10
+                            }
+                            
+                            Button {
+                                text: "Save"
+                                implicitWidth: 70
+                                implicitHeight: 40
+                                
+                                background: Rectangle {
+                                    color: parent.pressed ? "#7c22ce" : "#9333ea"
+                                    radius: 8
+                                }
+                                
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: "#ffffff"
+                                    font.pixelSize: 14
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                
+                                onClicked: {
+                                    if (root.feedController) {
+                                        root.feedController.set_nip96_server(nip96ServerInput.text.trim())
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Text {
+                            text: "GIFs are downloaded from Tenor and re-uploaded here for privacy. Default: https://nostr.build"
+                            color: "#666666"
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
                     }
                 }
                 

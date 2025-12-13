@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtWebEngine
 
 Rectangle {
     id: root
@@ -11,8 +10,6 @@ Rectangle {
     
     property string url: ""
     property string videoId: ""
-    property bool autoPlay: false
-    property bool isPlaying: false
     
     // Extract video ID from various YouTube URL formats
     function extractVideoId(urlStr) {
@@ -37,25 +34,10 @@ Rectangle {
         return ""
     }
     
-    // Check if URL is a YouTube URL
-    function isYouTubeUrl(urlStr) {
-        if (!urlStr) return false
-        var lower = urlStr.toLowerCase()
-        return lower.includes("youtube.com") || lower.includes("youtu.be")
-    }
-    
     // Get thumbnail URL
     function getThumbnailUrl(vidId) {
         if (!vidId) return ""
-        // Try maxresdefault first, fallback handled by Image
         return "https://img.youtube.com/vi/" + vidId + "/maxresdefault.jpg"
-    }
-    
-    // Get embed URL for YouTube video
-    function getEmbedUrl(vidId) {
-        if (!vidId) return ""
-        // Use YouTube embed with enablejsapi and origin for proper API access
-        return "https://www.youtube.com/embed/" + vidId + "?enablejsapi=1&rel=0&autoplay=1&playsinline=1&origin=https://www.youtube.com"
     }
     
     Component.onCompleted: {
@@ -64,15 +46,12 @@ Rectangle {
     
     onUrlChanged: {
         videoId = extractVideoId(url)
-        isPlaying = false
     }
     
-    // Thumbnail preview (shown before playing)
+    // Thumbnail preview
     Rectangle {
-        id: thumbnailContainer
         anchors.fill: parent
         color: "#1a1a1a"
-        visible: !isPlaying
         
         Image {
             id: thumbnail
@@ -103,7 +82,7 @@ Rectangle {
             }
         }
         
-        // Dark overlay for better visibility of play button
+        // Dark overlay
         Rectangle {
             anchors.fill: parent
             color: "#40000000"
@@ -146,15 +125,11 @@ Rectangle {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 hoverEnabled: true
-                
-                onClicked: {
-                    // Open YouTube externally - browser embed doesn't work reliably
-                    Qt.openUrlExternally(root.url)
-                }
+                onClicked: Qt.openUrlExternally(root.url)
             }
         }
         
-        // YouTube branding / video title indicator
+        // YouTube branding
         Rectangle {
             anchors.left: parent.left
             anchors.bottom: parent.bottom
@@ -184,7 +159,7 @@ Rectangle {
             }
         }
         
-        // Open externally button
+        // Open externally indicator
         Rectangle {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -192,7 +167,7 @@ Rectangle {
             width: externalRow.implicitWidth + 12
             height: 24
             radius: 4
-            color: externalArea.containsMouse ? "#80ffffff" : "#60000000"
+            color: "#60000000"
             
             RowLayout {
                 id: externalRow
@@ -206,106 +181,19 @@ Rectangle {
                 }
                 
                 Text {
-                    text: "Open"
-                    color: "#ffffff"
+                    text: "Opens in browser"
+                    color: "#aaaaaa"
                     font.pixelSize: 10
                 }
             }
-            
-            MouseArea {
-                id: externalArea
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                hoverEnabled: true
-                
-                onClicked: {
-                    Qt.openUrlExternally(root.url)
-                }
-            }
-            
-            ToolTip.visible: externalArea.containsMouse
-            ToolTip.text: "Open in external player"
-            ToolTip.delay: 500
-        }
-    }
-    
-    // WebEngineView for embedded playback
-    Loader {
-        id: webViewLoader
-        anchors.fill: parent
-        active: isPlaying
-        
-        sourceComponent: WebEngineView {
-            id: webView
-            
-            // Critical settings for YouTube embed playback
-            settings.playbackRequiresUserGesture: false
-            settings.javascriptEnabled: true
-            settings.pluginsEnabled: true
-            settings.localStorageEnabled: true
-            settings.localContentCanAccessRemoteUrls: true
-            settings.allowRunningInsecureContent: false
-            settings.autoLoadImages: true
-            settings.fullScreenSupportEnabled: true
-            settings.accelerated2dCanvasEnabled: true
-            settings.webGLEnabled: true
-            
-            // Load YouTube embed URL with API enabled
-            url: getEmbedUrl(videoId)
-            
-            // Handle loading
-            onLoadingChanged: function(loadRequest) {
-                if (loadRequest.status === WebEngineView.LoadFailedStatus) {
-                    console.log("YouTube embed failed to load:", loadRequest.errorString)
-                }
-            }
-            
-            // Handle fullscreen requests
-            onFullScreenRequested: function(request) {
-                request.accept()
-            }
-            
-            // Handle feature permission requests (media, audio, etc.)
-            onFeaturePermissionRequested: function(securityOrigin, feature) {
-                console.log("Permission requested for:", feature, "from:", securityOrigin)
-                grantFeaturePermission(securityOrigin, feature, true)
-            }
-        }
-    }
-    
-    // Close/Stop button when playing
-    Rectangle {
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 8
-        width: 32
-        height: 32
-        radius: 16
-        color: closeArea.containsMouse ? "#ffffff" : "#80000000"
-        visible: isPlaying
-        z: 100
-        
-        Text {
-            anchors.centerIn: parent
-            text: "✕"
-            color: closeArea.containsMouse ? "#000000" : "#ffffff"
-            font.pixelSize: 16
-            font.weight: Font.Bold
         }
         
+        // Full area clickable
         MouseArea {
-            id: closeArea
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
-            hoverEnabled: true
-            
-            onClicked: {
-                isPlaying = false
-            }
+            onClicked: Qt.openUrlExternally(root.url)
+            z: -1
         }
-        
-        ToolTip.visible: closeArea.containsMouse
-        ToolTip.text: "Stop video"
-        ToolTip.delay: 500
     }
 }

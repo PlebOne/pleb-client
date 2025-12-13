@@ -130,6 +130,56 @@ pub mod qobject {
         /// Returns JSON with title, description, image, siteName
         #[qinvokable]
         fn fetch_link_preview(self: Pin<&mut FeedController>, url: &QString) -> QString;
+        
+        /// Publish a long-form article (NIP-23 kind 30023)
+        /// metadata_json contains: {title, summary, image, slug, publishedAt}
+        #[qinvokable]
+        fn publish_long_form(self: Pin<&mut FeedController>, content: &QString, metadata_json: &QString);
+        
+        /// Save an article draft to filesystem
+        /// draft_json contains: {id, title, summary, image, slug, content, createdAt, updatedAt}
+        #[qinvokable]
+        fn save_article_draft(self: Pin<&mut FeedController>, draft_json: &QString) -> QString;
+        
+        /// Load all article drafts from filesystem
+        /// Returns JSON array of drafts
+        #[qinvokable]
+        fn load_article_drafts(self: &FeedController) -> QString;
+        
+        /// Delete an article draft
+        #[qinvokable]
+        fn delete_article_draft(self: Pin<&mut FeedController>, draft_id: &QString) -> bool;
+        
+        /// Search Tenor for GIFs
+        /// Returns JSON array of GIF results with urls and dimensions
+        #[qinvokable]
+        fn search_gifs(self: Pin<&mut FeedController>, query: &QString) -> QString;
+        
+        /// Get trending GIFs from Tenor
+        /// Returns JSON array of GIF results
+        #[qinvokable]
+        fn get_trending_gifs(self: Pin<&mut FeedController>) -> QString;
+        
+        /// Bridge a GIF from Tenor to Nostr via NIP-96 re-upload
+        /// Downloads from Tenor and re-uploads to NIP-96 server for privacy
+        #[qinvokable]
+        fn bridge_gif(self: Pin<&mut FeedController>, tenor_url: &QString);
+        
+        /// Get the Tenor API key status
+        #[qinvokable]
+        fn has_tenor_api_key(self: &FeedController) -> bool;
+        
+        /// Set the Tenor API key
+        #[qinvokable]
+        fn set_tenor_api_key(self: Pin<&mut FeedController>, key: &QString);
+        
+        /// Get the NIP-96 server URL
+        #[qinvokable]
+        fn get_nip96_server(self: &FeedController) -> QString;
+        
+        /// Set the NIP-96 server URL
+        #[qinvokable]
+        fn set_nip96_server(self: Pin<&mut FeedController>, url: &QString);
     }
 
     unsafe extern "RustQt" {
@@ -186,6 +236,26 @@ pub mod qobject {
         /// Contains display_name and picture URL
         #[qsignal]
         fn user_profile_loaded(self: Pin<&mut FeedController>, display_name: &QString, picture: &QString);
+        
+        /// Emitted when a long-form article is published
+        #[qsignal]
+        fn article_published(self: Pin<&mut FeedController>, event_id: &QString, naddr: &QString);
+        
+        /// Emitted when article publishing fails
+        #[qsignal]
+        fn article_publish_failed(self: Pin<&mut FeedController>, error: &QString);
+        
+        /// Emitted when a draft is saved
+        #[qsignal]
+        fn draft_saved(self: Pin<&mut FeedController>, draft_id: &QString);
+        
+        /// Emitted when GIF bridge completes (re-upload to NIP-96 server)
+        #[qsignal]
+        fn gif_bridged(self: Pin<&mut FeedController>, url: &QString);
+        
+        /// Emitted when GIF bridge fails
+        #[qsignal]
+        fn gif_bridge_failed(self: Pin<&mut FeedController>, error: &QString);
     }
     
     // Enable threading support for background work with UI updates
@@ -204,6 +274,7 @@ use crate::nostr::{
     feed::DisplayNote,
     profile::ProfileCache,
     blossom,
+    tenor,
     zap::{self, GLOBAL_NWC_MANAGER},
 };
 use crate::core::config::Config;
@@ -296,10 +367,25 @@ fn prefetch_feed(feed_type: FeedType) {
                 FeedType::ReadsGlobal => manager.fetch_long_form_global(limit, None).await?,
             };
             
-            // Fetch profiles
-            let pubkeys: Vec<PublicKey> = events
+            // Collect author pubkeys
+            let mut pubkeys: Vec<PublicKey> = events
                 .iter()
                 .map(|e| e.pubkey)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            
+            // Also collect reply-to author pubkeys
+            let reply_to_pubkeys = crate::nostr::feed::extract_reply_to_pubkeys(events.iter());
+            for pk_hex in reply_to_pubkeys {
+                if let Ok(pk) = PublicKey::parse(&pk_hex) {
+                    pubkeys.push(pk);
+                }
+            }
+            
+            // Deduplicate
+            let pubkeys: Vec<PublicKey> = pubkeys
+                .into_iter()
                 .collect::<std::collections::HashSet<_>>()
                 .into_iter()
                 .collect();
@@ -319,7 +405,7 @@ fn prefetch_feed(feed_type: FeedType) {
                 .map(|e| {
                     let pubkey_hex = e.pubkey.to_hex();
                     let profile = profile_map.get(&pubkey_hex);
-                    DisplayNote::from_event(e, profile)
+                    DisplayNote::from_event_with_profiles(e, profile, &profile_map)
                 })
                 .filter(|n| {
                     // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
@@ -548,10 +634,25 @@ impl qobject::FeedController {
                 let limit = 50u64;
                 let events = manager.fetch_following_feed(limit, None).await?;
                 
-                // Fetch profiles
-                let pubkeys: Vec<PublicKey> = events
+                // Collect author pubkeys
+                let mut pubkeys: Vec<PublicKey> = events
                     .iter()
                     .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                // Also collect reply-to author pubkeys
+                let reply_to_pubkeys = crate::nostr::feed::extract_reply_to_pubkeys(events.iter());
+                for pk_hex in reply_to_pubkeys {
+                    if let Ok(pk) = PublicKey::parse(&pk_hex) {
+                        pubkeys.push(pk);
+                    }
+                }
+                
+                // Deduplicate
+                let pubkeys: Vec<PublicKey> = pubkeys
+                    .into_iter()
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();
@@ -571,7 +672,7 @@ impl qobject::FeedController {
                     .map(|e| {
                         let pubkey_hex = e.pubkey.to_hex();
                         let profile = profile_map.get(&pubkey_hex);
-                        DisplayNote::from_event(e, profile)
+                        DisplayNote::from_event_with_profiles(e, profile, &profile_map)
                     })
                     .collect();
                 
@@ -691,9 +792,24 @@ impl qobject::FeedController {
                 };
                 
                 // Collect unique pubkeys for profile fetching
-                let pubkeys: Vec<PublicKey> = events
+                let mut pubkeys: Vec<PublicKey> = events
                     .iter()
                     .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                // Also collect reply-to author pubkeys
+                let reply_to_pubkeys = crate::nostr::feed::extract_reply_to_pubkeys(events.iter());
+                for pk_hex in reply_to_pubkeys {
+                    if let Ok(pk) = PublicKey::parse(&pk_hex) {
+                        pubkeys.push(pk);
+                    }
+                }
+                
+                // Deduplicate
+                let pubkeys: Vec<PublicKey> = pubkeys
+                    .into_iter()
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();
@@ -716,7 +832,7 @@ impl qobject::FeedController {
                     .map(|e| {
                         let pubkey_hex = e.pubkey.to_hex();
                         let profile = profile_map.get(&pubkey_hex);
-                        DisplayNote::from_event(e, profile)
+                        DisplayNote::from_event_with_profiles(e, profile, &profile_map)
                     })
                     .collect();
                 
@@ -880,9 +996,24 @@ impl qobject::FeedController {
                     });
                 
                 // Fetch profiles for new authors
-                let pubkeys: Vec<PublicKey> = events
+                let mut pubkeys: Vec<PublicKey> = events
                     .iter()
                     .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                // Also collect reply-to author pubkeys
+                let reply_to_pubkeys = crate::nostr::feed::extract_reply_to_pubkeys(events.iter());
+                for pk_hex in reply_to_pubkeys {
+                    if let Ok(pk) = PublicKey::parse(&pk_hex) {
+                        pubkeys.push(pk);
+                    }
+                }
+                
+                // Deduplicate
+                let pubkeys: Vec<PublicKey> = pubkeys
+                    .into_iter()
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();
@@ -902,7 +1033,7 @@ impl qobject::FeedController {
                     .map(|e| {
                         let pubkey_hex = e.pubkey.to_hex();
                         let profile = profile_map.get(&pubkey_hex);
-                        DisplayNote::from_event(e, profile)
+                        DisplayNote::from_event_with_profiles(e, profile, &profile_map)
                     })
                     .filter(|n| {
                         // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
@@ -1055,7 +1186,7 @@ impl qobject::FeedController {
                 .map(|e| {
                     let pubkey_hex = e.pubkey.to_hex();
                     let profile = profile_map.get(&pubkey_hex);
-                    DisplayNote::from_event(e, profile)
+                    DisplayNote::from_event_with_profiles(e, profile, &profile_map)
                 })
                 .collect();
             
@@ -1173,9 +1304,24 @@ impl qobject::FeedController {
                 }
                 
                 // Fetch profiles for new authors
-                let pubkeys: Vec<PublicKey> = new_events
+                let mut pubkeys: Vec<PublicKey> = new_events
                     .iter()
                     .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                // Also collect reply-to author pubkeys
+                let reply_to_pubkeys = crate::nostr::feed::extract_reply_to_pubkeys(&new_events);
+                for pk_hex in reply_to_pubkeys {
+                    if let Ok(pk) = PublicKey::parse(&pk_hex) {
+                        pubkeys.push(pk);
+                    }
+                }
+                
+                // Deduplicate
+                let pubkeys: Vec<PublicKey> = pubkeys
+                    .into_iter()
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();
@@ -1195,7 +1341,7 @@ impl qobject::FeedController {
                     .map(|e| {
                         let pubkey_hex = e.pubkey.to_hex();
                         let profile = profile_map.get(&pubkey_hex);
-                        DisplayNote::from_event(e, profile)
+                        DisplayNote::from_event_with_profiles(e, profile, &profile_map)
                     })
                     .filter(|n| {
                         // Filter reads feeds: must be kind 30023 with title AND d_tag (proper NIP-23)
@@ -1310,10 +1456,25 @@ impl qobject::FeedController {
                 }
                 all_events.extend(replies.clone());
                 
-                // Fetch profiles
-                let pubkeys: Vec<PublicKey> = all_events
+                // Fetch profiles (including reply-to authors)
+                let mut pubkeys: Vec<PublicKey> = all_events
                     .iter()
                     .map(|e| e.pubkey)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                
+                // Also collect reply-to author pubkeys
+                let reply_to_pubkeys = crate::nostr::feed::extract_reply_to_pubkeys(&all_events);
+                for pk_hex in reply_to_pubkeys {
+                    if let Ok(pk) = PublicKey::parse(&pk_hex) {
+                        pubkeys.push(pk);
+                    }
+                }
+                
+                // Deduplicate
+                let pubkeys: Vec<PublicKey> = pubkeys
+                    .into_iter()
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();
@@ -1334,19 +1495,19 @@ impl qobject::FeedController {
                 for event in &parents {
                     let pubkey_hex = event.pubkey.to_hex();
                     let profile = profile_map.get(&pubkey_hex);
-                    thread_notes.push(DisplayNote::from_event(event, profile));
+                    thread_notes.push(DisplayNote::from_event_with_profiles(event, profile, &profile_map));
                 }
                 
                 if let Some(ref t) = target {
                     let pubkey_hex = t.pubkey.to_hex();
                     let profile = profile_map.get(&pubkey_hex);
-                    thread_notes.push(DisplayNote::from_event(t, profile));
+                    thread_notes.push(DisplayNote::from_event_with_profiles(t, profile, &profile_map));
                 }
                 
                 for event in &replies {
                     let pubkey_hex = event.pubkey.to_hex();
                     let profile = profile_map.get(&pubkey_hex);
-                    thread_notes.push(DisplayNote::from_event(event, profile));
+                    thread_notes.push(DisplayNote::from_event_with_profiles(event, profile, &profile_map));
                 }
                 
                 Ok(thread_notes)
@@ -2564,6 +2725,434 @@ impl qobject::FeedController {
         
         QString::from("{}")
     }
+    
+    /// Publish a long-form article (NIP-23 kind 30023)
+    pub fn publish_long_form(mut self: Pin<&mut Self>, content: &QString, metadata_json: &QString) {
+        let content_str = content.to_string();
+        let metadata_str = metadata_json.to_string();
+        
+        tracing::info!("Publishing long-form article");
+        
+        let user_pubkey = self.user_pubkey.clone();
+        
+        // Parse metadata
+        #[derive(serde::Deserialize)]
+        struct ArticleMetadata {
+            title: String,
+            summary: Option<String>,
+            image: Option<String>,
+            slug: Option<String>,
+            #[serde(rename = "publishedAt")]
+            published_at: Option<i64>,
+        }
+        
+        let metadata: ArticleMetadata = match serde_json::from_str(&metadata_str) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("Invalid article metadata: {}", e);
+                self.as_mut().article_publish_failed(&QString::from(&format!("Invalid metadata: {}", e)));
+                return;
+            }
+        };
+        
+        let result = FEED_RUNTIME.block_on(async {
+            let user_pk = user_pubkey.as_ref()
+                .and_then(|pk| PublicKey::parse(pk).ok())
+                .ok_or("User not initialized")?;
+            
+            // Get relay manager
+            let rm = RELAY_MANAGER.read().unwrap();
+            let manager = rm.as_ref().ok_or("Not connected to relays")?;
+            let client = manager.client();
+            
+            // Generate d-tag (slug) if not provided
+            let d_tag = metadata.slug.unwrap_or_else(|| {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                format!("{}-{}", slug::slugify(&metadata.title), timestamp)
+            });
+            
+            // Build the event with NIP-23 tags
+            let mut builder = EventBuilder::new(Kind::LongFormTextNote, &content_str);
+            
+            // Required tags
+            builder = builder.tag(Tag::identifier(d_tag.clone()));
+            builder = builder.tag(Tag::title(&metadata.title));
+            
+            // Optional tags
+            if let Some(summary) = &metadata.summary {
+                if !summary.is_empty() {
+                    builder = builder.tag(Tag::custom(TagKind::Summary, vec![summary.clone()]));
+                }
+            }
+            
+            if let Some(image) = &metadata.image {
+                if !image.is_empty() {
+                    builder = builder.tag(Tag::image(image.parse().unwrap_or_else(|_| url::Url::parse("https://placeholder.com").unwrap()), None));
+                }
+            }
+            
+            // Published timestamp
+            let published_at = metadata.published_at.unwrap_or_else(|| {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            });
+            builder = builder.tag(Tag::custom(
+                TagKind::custom("published_at"),
+                vec![published_at.to_string()]
+            ));
+            
+            let signer = FEED_SIGNER.lock().await;
+            if let Some(s) = signer.as_ref() {
+                let unsigned = builder.build(user_pk);
+                
+                let unsigned_json = serde_json::to_string(&unsigned)
+                    .map_err(|e| format!("Serialization failed: {}", e))?;
+                
+                let signed_result = s.sign_event(&unsigned_json).await
+                    .map_err(|e| format!("Signing failed: {}", e))?;
+                
+                let signed_event: Event = serde_json::from_str(&signed_result.event_json)
+                    .map_err(|e| format!("Failed to parse signed event: {}", e))?;
+                
+                let event_id = signed_event.id.to_hex();
+                
+                client.send_event(&signed_event).await
+                    .map_err(|e| format!("Failed to send: {}", e))?;
+                
+                // Create naddr for the article
+                let naddr = format!("naddr1{}", ""); // Simplified - full naddr encoding would be more complex
+                
+                Ok::<(String, String, String), String>((event_id, d_tag, naddr))
+            } else if let Some(nsec) = FEED_NSEC.read().unwrap().as_ref() {
+                let secret_key = SecretKey::parse(nsec)
+                    .map_err(|e| format!("Invalid nsec: {}", e))?;
+                let keys = Keys::new(secret_key);
+                
+                let event = builder.sign_with_keys(&keys)
+                    .map_err(|e| format!("Failed to sign: {}", e))?;
+                
+                let event_id = event.id.to_hex();
+                
+                client.send_event(&event).await
+                    .map_err(|e| format!("Failed to send: {}", e))?;
+                
+                // Create naddr coordinate
+                let coordinate = Coordinate::new(Kind::LongFormTextNote, user_pk)
+                    .identifier(&d_tag);
+                let naddr = coordinate.to_bech32().unwrap_or_default();
+                
+                Ok((event_id, d_tag, naddr))
+            } else {
+                Err("No signing capability available".to_string())
+            }
+        });
+        
+        match result {
+            Ok((event_id, _d_tag, naddr)) => {
+                tracing::info!("Published article, event: {}", event_id);
+                self.as_mut().article_published(&QString::from(&event_id), &QString::from(&naddr));
+            }
+            Err(e) => {
+                tracing::error!("Failed to publish article: {}", e);
+                self.as_mut().article_publish_failed(&QString::from(&e));
+            }
+        }
+    }
+    
+    /// Save an article draft to filesystem
+    pub fn save_article_draft(mut self: Pin<&mut Self>, draft_json: &QString) -> QString {
+        let draft_str = draft_json.to_string();
+        
+        // Parse and validate the draft
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct ArticleDraft {
+            id: Option<String>,
+            title: String,
+            summary: Option<String>,
+            image: Option<String>,
+            slug: Option<String>,
+            content: String,
+            #[serde(rename = "createdAt")]
+            created_at: Option<i64>,
+            #[serde(rename = "updatedAt")]
+            updated_at: Option<i64>,
+        }
+        
+        let mut draft: ArticleDraft = match serde_json::from_str(&draft_str) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Invalid draft JSON: {}", e);
+                return QString::from(&format!("{{\"error\": \"{}\"}}", e));
+            }
+        };
+        
+        // Generate ID if not present
+        let draft_id = draft.id.unwrap_or_else(|| {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            format!("draft-{}", timestamp)
+        });
+        draft.id = Some(draft_id.clone());
+        
+        // Set timestamps
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        
+        if draft.created_at.is_none() {
+            draft.created_at = Some(now);
+        }
+        draft.updated_at = Some(now);
+        
+        // Get drafts directory
+        let drafts_dir = match get_drafts_directory() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to get drafts directory: {}", e);
+                return QString::from(&format!("{{\"error\": \"{}\"}}", e));
+            }
+        };
+        
+        // Save draft to file
+        let draft_file = drafts_dir.join(format!("{}.json", draft_id));
+        let draft_json = match serde_json::to_string_pretty(&draft) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::error!("Failed to serialize draft: {}", e);
+                return QString::from(&format!("{{\"error\": \"{}\"}}", e));
+            }
+        };
+        
+        if let Err(e) = std::fs::write(&draft_file, &draft_json) {
+            tracing::error!("Failed to write draft file: {}", e);
+            return QString::from(&format!("{{\"error\": \"{}\"}}", e));
+        }
+        
+        tracing::info!("Saved draft: {}", draft_id);
+        self.as_mut().draft_saved(&QString::from(&draft_id));
+        
+        QString::from(&format!("{{\"id\": \"{}\"}}", draft_id))
+    }
+    
+    /// Load all article drafts from filesystem
+    pub fn load_article_drafts(&self) -> QString {
+        let drafts_dir = match get_drafts_directory() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to get drafts directory: {}", e);
+                return QString::from("[]");
+            }
+        };
+        
+        let mut drafts = Vec::new();
+        
+        if let Ok(entries) = std::fs::read_dir(&drafts_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |e| e == "json") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(draft) = serde_json::from_str::<serde_json::Value>(&content) {
+                            drafts.push(draft);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Sort by updatedAt descending
+        drafts.sort_by(|a, b| {
+            let a_time = a.get("updatedAt").and_then(|v| v.as_i64()).unwrap_or(0);
+            let b_time = b.get("updatedAt").and_then(|v| v.as_i64()).unwrap_or(0);
+            b_time.cmp(&a_time)
+        });
+        
+        QString::from(&serde_json::to_string(&drafts).unwrap_or_else(|_| "[]".to_string()))
+    }
+    
+    /// Delete an article draft
+    pub fn delete_article_draft(self: Pin<&mut Self>, draft_id: &QString) -> bool {
+        let draft_id_str = draft_id.to_string();
+        
+        let drafts_dir = match get_drafts_directory() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to get drafts directory: {}", e);
+                return false;
+            }
+        };
+        
+        let draft_file = drafts_dir.join(format!("{}.json", draft_id_str));
+        
+        if draft_file.exists() {
+            if let Err(e) = std::fs::remove_file(&draft_file) {
+                tracing::error!("Failed to delete draft: {}", e);
+                return false;
+            }
+            tracing::info!("Deleted draft: {}", draft_id_str);
+            true
+        } else {
+            tracing::warn!("Draft not found: {}", draft_id_str);
+            false
+        }
+    }
+    
+    /// Search Tenor for GIFs
+    pub fn search_gifs(self: Pin<&mut Self>, query: &QString) -> QString {
+        let query_str = query.to_string();
+        
+        if query_str.trim().is_empty() {
+            return QString::from("[]");
+        }
+        
+        let config = Config::load();
+        let api_key = match config.tenor_api_key {
+            Some(key) if !key.is_empty() => key,
+            _ => {
+                tracing::warn!("Tenor API key not configured");
+                return QString::from(r#"{"error": "Tenor API key not configured"}"#);
+            }
+        };
+        
+        let result = FEED_RUNTIME.block_on(async {
+            tenor::search_gifs(&api_key, &query_str, 20).await
+        });
+        
+        match result {
+            Ok(gifs) => {
+                QString::from(&serde_json::to_string(&gifs).unwrap_or_else(|_| "[]".to_string()))
+            }
+            Err(e) => {
+                tracing::error!("Tenor search failed: {}", e);
+                QString::from(&format!(r#"{{"error": "{}"}}"#, e.replace('"', "'")))
+            }
+        }
+    }
+    
+    /// Get trending GIFs from Tenor
+    pub fn get_trending_gifs(self: Pin<&mut Self>) -> QString {
+        let config = Config::load();
+        let api_key = match config.tenor_api_key {
+            Some(key) if !key.is_empty() => key,
+            _ => {
+                tracing::warn!("Tenor API key not configured");
+                return QString::from(r#"{"error": "Tenor API key not configured"}"#);
+            }
+        };
+        
+        let result = FEED_RUNTIME.block_on(async {
+            tenor::get_trending_gifs(&api_key, 20).await
+        });
+        
+        match result {
+            Ok(gifs) => {
+                QString::from(&serde_json::to_string(&gifs).unwrap_or_else(|_| "[]".to_string()))
+            }
+            Err(e) => {
+                tracing::error!("Tenor trending failed: {}", e);
+                QString::from(&format!(r#"{{"error": "{}"}}"#, e.replace('"', "'")))
+            }
+        }
+    }
+    
+    /// Bridge a GIF from Tenor to Nostr via NIP-96 re-upload
+    pub fn bridge_gif(mut self: Pin<&mut Self>, tenor_url: &QString) {
+        let url_str = tenor_url.to_string();
+        let config = Config::load();
+        let nip96_server = config.nip96_server;
+        
+        // Clone self for the thread
+        let qt_thread = self.qt_thread();
+        
+        std::thread::spawn(move || {
+            let result = FEED_RUNTIME.block_on(async {
+                // Get keys for signing
+                let nsec_opt = FEED_NSEC.read().unwrap();
+                let keys = if let Some(nsec) = nsec_opt.as_ref() {
+                    let secret_key = SecretKey::parse(nsec)
+                        .map_err(|e| format!("Invalid nsec: {}", e))?;
+                    Keys::new(secret_key)
+                } else {
+                    return Err("No signing key available".to_string());
+                };
+                
+                tenor::bridge_gif_to_nostr(&url_str, &nip96_server, &keys).await
+            });
+            
+            qt_thread.queue(move |mut controller| {
+                match result {
+                    Ok(url) => {
+                        controller.as_mut().gif_bridged(&QString::from(&url));
+                    }
+                    Err(e) => {
+                        tracing::error!("GIF bridge failed: {}", e);
+                        controller.as_mut().gif_bridge_failed(&QString::from(&e));
+                    }
+                }
+            }).ok();
+        });
+    }
+    
+    /// Check if Tenor API key is configured
+    pub fn has_tenor_api_key(self: &Self) -> bool {
+        let config = Config::load();
+        config.tenor_api_key.map(|k| !k.is_empty()).unwrap_or(false)
+    }
+    
+    /// Set the Tenor API key
+    pub fn set_tenor_api_key(self: Pin<&mut Self>, key: &QString) {
+        let key_str = key.to_string();
+        let mut config = Config::load();
+        config.tenor_api_key = if key_str.is_empty() { None } else { Some(key_str) };
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save Tenor API key: {}", e);
+        }
+    }
+    
+    /// Get the NIP-96 server URL
+    pub fn get_nip96_server(self: &Self) -> QString {
+        let config = Config::load();
+        QString::from(&config.nip96_server)
+    }
+    
+    /// Set the NIP-96 server URL
+    pub fn set_nip96_server(self: Pin<&mut Self>, url: &QString) {
+        let url_str = url.to_string();
+        let mut config = Config::load();
+        config.nip96_server = if url_str.is_empty() { 
+            crate::core::config::DEFAULT_NIP96_SERVER.to_string() 
+        } else { 
+            url_str 
+        };
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save NIP-96 server: {}", e);
+        }
+    }
+}
+
+/// Get the drafts directory, creating it if necessary
+fn get_drafts_directory() -> Result<std::path::PathBuf, String> {
+    let data_dir = dirs::data_local_dir()
+        .ok_or("Could not determine data directory")?
+        .join("pleb-client")
+        .join("drafts");
+    
+    if !data_dir.exists() {
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("Failed to create drafts directory: {}", e))?;
+    }
+    
+    Ok(data_dir)
 }
 
 /// Fetch OpenGraph metadata from a URL

@@ -1,11 +1,11 @@
 //! Search bridge - QML bridge for search functionality
-//! Supports searching for notes, users, and hashtags
+//! Supports searching for notes, users, and hashtags with time range filtering
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use std::pin::Pin;
 
-use nostr_sdk::{Filter, Kind};
+use nostr_sdk::{Filter, Kind, Timestamp};
 
 #[cxx_qt::bridge]
 mod ffi {
@@ -22,6 +22,7 @@ mod ffi {
         #[qproperty(i32, user_count)]
         #[qproperty(i32, note_count)]
         #[qproperty(QString, search_type)]
+        #[qproperty(i32, time_range_days)]
         type SearchController = super::SearchControllerRust;
 
         #[qinvokable]
@@ -31,7 +32,16 @@ mod ffi {
         fn search_notes(self: Pin<&mut SearchController>, query: &QString);
 
         #[qinvokable]
+        fn search_notes_with_time(self: Pin<&mut SearchController>, query: &QString, days: i32);
+
+        #[qinvokable]
         fn search_hashtag(self: Pin<&mut SearchController>, hashtag: &QString);
+
+        #[qinvokable]
+        fn search_hashtag_with_time(self: Pin<&mut SearchController>, hashtag: &QString, days: i32);
+
+        #[qinvokable]
+        fn set_time_range(self: Pin<&mut SearchController>, days: i32);
 
         #[qinvokable]
         fn get_user(self: &SearchController, index: i32) -> QString;
@@ -87,16 +97,48 @@ pub struct NoteResult {
 }
 
 /// Rust struct for SearchController
-#[derive(Default)]
 pub struct SearchControllerRust {
     query: QString,
     is_searching: bool,
     user_count: i32,
     note_count: i32,
     search_type: QString,
+    time_range_days: i32,
     
     user_results: Vec<UserResult>,
     note_results: Vec<NoteResult>,
+}
+
+impl Default for SearchControllerRust {
+    fn default() -> Self {
+        Self {
+            query: QString::default(),
+            is_searching: false,
+            user_count: 0,
+            note_count: 0,
+            search_type: QString::from("notes"), // Default to notes search
+            time_range_days: 7, // Default to 7 days
+            user_results: Vec::new(),
+            note_results: Vec::new(),
+        }
+    }
+}
+
+/// Check if text contains all search words (fuzzy word matching)
+fn fuzzy_match(text: &str, search_words: &[String]) -> bool {
+    let text_lower = text.to_lowercase();
+    // All search words must be found in the text
+    search_words.iter().all(|word| text_lower.contains(word))
+}
+
+/// Calculate timestamp for N days ago
+fn days_ago(days: i32) -> Timestamp {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let seconds_ago = (days as u64) * 24 * 60 * 60;
+    Timestamp::from(now.saturating_sub(seconds_ago))
 }
 
 impl ffi::SearchController {
@@ -244,6 +286,15 @@ impl ffi::SearchController {
     }
     
     pub fn search_notes(mut self: Pin<&mut Self>, query: &QString) {
+        // Use the stored time range, defaulting to 7 days
+        let days = {
+            let rust = self.as_ref();
+            if rust.time_range_days > 0 { rust.time_range_days } else { 7 }
+        };
+        self.search_notes_with_time(query, days);
+    }
+    
+    pub fn search_notes_with_time(mut self: Pin<&mut Self>, query: &QString, days: i32) {
         let query_str = query.to_string();
         if query_str.trim().is_empty() {
             return;
@@ -256,13 +307,24 @@ impl ffi::SearchController {
             rust.search_type = QString::from("notes");
             rust.note_results.clear();
             rust.note_count = 0;
+            rust.time_range_days = days;
         }
         self.as_mut().set_is_searching(true);
         self.as_mut().set_note_count(0);
         self.as_mut().set_search_type(QString::from("notes"));
+        self.as_mut().set_time_range_days(days);
         
-        let query_lower = query_str.to_lowercase();
+        // Split query into words for fuzzy matching
+        let search_words: Vec<String> = query_str
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        
         let qt_thread = self.qt_thread();
+        let since_timestamp = days_ago(days);
+        
+        println!("[Search] Searching notes with {} words, last {} days", search_words.len(), days);
         
         std::thread::spawn(move || {
             let result = SEARCH_RUNTIME.block_on(async {
@@ -273,42 +335,224 @@ impl ffi::SearchController {
                 
                 let mut results = Vec::new();
                 
-                // Fetch recent notes
+                // Fetch notes within time range
                 let filter = Filter::new()
                     .kind(Kind::TextNote)
-                    .limit(500);
+                    .since(since_timestamp)
+                    .limit(1000);
                 
-                if let Ok(events) = manager.client().fetch_events(filter, std::time::Duration::from_secs(15)).await {
+                println!("[Search] Fetching notes since timestamp: {}", since_timestamp.as_secs());
+                
+                if let Ok(events) = manager.client().fetch_events(filter, std::time::Duration::from_secs(20)).await {
+                    println!("[Search] Fetched {} notes, filtering with fuzzy match", events.len());
+                    
+                    // First pass: collect matching notes and their author pubkeys
+                    let mut matching_events = Vec::new();
+                    let mut author_pubkeys = std::collections::HashSet::new();
+                    
                     for event in events {
-                        let content_lower = event.content.to_lowercase();
-                        
-                        if content_lower.contains(&query_lower) {
-                            let mut author_name = String::new();
-                            let mut author_picture = String::new();
+                        // Fuzzy match: all search words must appear in the content
+                        if fuzzy_match(&event.content, &search_words) {
+                            author_pubkeys.insert(event.pubkey);
+                            matching_events.push(event);
                             
-                            // Try to resolve author profile
-                            if let Ok(db) = NostrDbManager::global() {
-                                if let Some(profile) = db.get_profile(&event.pubkey.to_hex()) {
-                                    author_name = profile.display_name.or(profile.name).unwrap_or_default();
-                                    author_picture = profile.picture.unwrap_or_default();
-                                }
-                            }
-
-                            results.push(NoteResult {
-                                id: event.id.to_hex(),
-                                pubkey: event.pubkey.to_hex(),
-                                author_name,
-                                author_picture,
-                                content: event.content.clone(),
-                                created_at: event.created_at.as_secs() as i64,
-                            });
-                            
-                            if results.len() >= 50 {
+                            if matching_events.len() >= 100 {
                                 break;
                             }
                         }
                     }
+                    
+                    println!("[Search] Found {} matching notes from {} authors", matching_events.len(), author_pubkeys.len());
+                    
+                    // Fetch author profiles from relays
+                    if !author_pubkeys.is_empty() {
+                        let pubkeys: Vec<_> = author_pubkeys.into_iter().collect();
+                        let profile_filter = Filter::new()
+                            .kind(Kind::Metadata)
+                            .authors(pubkeys)
+                            .limit(200);
+                        
+                        println!("[Search] Fetching profiles for {} authors...", profile_filter.authors.as_ref().map(|a| a.len()).unwrap_or(0));
+                        
+                        if let Ok(profile_events) = manager.client().fetch_events(profile_filter, std::time::Duration::from_secs(10)).await {
+                            println!("[Search] Fetched {} profile events", profile_events.len());
+                            // Store profiles in local cache
+                            for event in profile_events {
+                                if let Ok(db) = NostrDbManager::global() {
+                                    let _ = db.ingest_profile(&event);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Second pass: build results with resolved author info
+                    for event in matching_events {
+                        let mut author_name = String::new();
+                        let mut author_picture = String::new();
+                        
+                        // Try to resolve author profile from cache (now populated)
+                        if let Ok(db) = NostrDbManager::global() {
+                            if let Some(profile) = db.get_profile(&event.pubkey.to_hex()) {
+                                author_name = profile.display_name.or(profile.name).unwrap_or_default();
+                                author_picture = profile.picture.unwrap_or_default();
+                            }
+                        }
+
+                        results.push(NoteResult {
+                            id: event.id.to_hex(),
+                            pubkey: event.pubkey.to_hex(),
+                            author_name,
+                            author_picture,
+                            content: event.content.clone(),
+                            created_at: event.created_at.as_secs() as i64,
+                        });
+                    }
+                    
+                    println!("[Search] Built {} results with author info", results.len());
                 }
+                
+                // Sort by created_at descending (newest first)
+                results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                
+                println!("[Search] Sorted {} results, returning from async block", results.len());
+                Ok(results)
+            });
+            
+            println!("[Search] Async block finished, queuing Qt callback");
+            let _ = qt_thread.queue(move |mut qobject| {
+                println!("[Search] Qt callback started for notes");
+                match result {
+                    Ok(results) => {
+                        let count = results.len() as i32;
+                        println!("[Search] Updating note count to {}", count);
+                        {
+                            let mut rust = qobject.as_mut().rust_mut();
+                            rust.note_results = results;
+                            rust.note_count = count;
+                            rust.is_searching = false;
+                        }
+                        qobject.as_mut().set_note_count(count);
+                        qobject.as_mut().set_is_searching(false);
+                        qobject.as_mut().search_completed();
+                        println!("[Search] Notes search completed signal emitted");
+                    }
+                    Err(e) => {
+                        println!("[Search] Error in notes search: {}", e);
+                        qobject.as_mut().rust_mut().is_searching = false;
+                        qobject.as_mut().set_is_searching(false);
+                        qobject.as_mut().error_occurred(QString::from(&e));
+                    }
+                }
+            });
+        });
+    }
+    
+    pub fn search_hashtag(mut self: Pin<&mut Self>, hashtag: &QString) {
+        // Use the stored time range, defaulting to 7 days
+        let days = {
+            let rust = self.as_ref();
+            if rust.time_range_days > 0 { rust.time_range_days } else { 7 }
+        };
+        self.search_hashtag_with_time(hashtag, days);
+    }
+    
+    pub fn search_hashtag_with_time(mut self: Pin<&mut Self>, hashtag: &QString, days: i32) {
+        let hashtag_str = hashtag.to_string();
+        let hashtag_clean = hashtag_str.trim_start_matches('#').to_lowercase();
+        
+        if hashtag_clean.is_empty() {
+            return;
+        }
+        
+        {
+            let mut rust = self.as_mut().rust_mut();
+            rust.query = QString::from(&format!("#{}", hashtag_clean));
+            rust.is_searching = true;
+            rust.search_type = QString::from("hashtags");
+            rust.note_results.clear();
+            rust.note_count = 0;
+            rust.time_range_days = days;
+        }
+        self.as_mut().set_is_searching(true);
+        self.as_mut().set_note_count(0);
+        self.as_mut().set_search_type(QString::from("hashtags"));
+        self.as_mut().set_time_range_days(days);
+        
+        let qt_thread = self.qt_thread();
+        let since_timestamp = days_ago(days);
+        
+        println!("[Search] Searching hashtag #{} in last {} days", hashtag_clean, days);
+        
+        std::thread::spawn(move || {
+            let result = SEARCH_RUNTIME.block_on(async {
+                let rm = SEARCH_RELAY_MANAGER.read().unwrap();
+                let Some(manager) = rm.as_ref() else {
+                    return Err("Relay manager not initialized".to_string());
+                };
+                
+                let mut results = Vec::new();
+                
+                // Search by hashtag tag with time filter
+                let filter = Filter::new()
+                    .kind(Kind::TextNote)
+                    .hashtag(hashtag_clean.clone())
+                    .since(since_timestamp)
+                    .limit(200);
+                
+                if let Ok(events) = manager.client().fetch_events(filter, std::time::Duration::from_secs(20)).await {
+                    println!("[Search] Found {} notes with #{}", events.len(), hashtag_clean);
+                    
+                    // Collect author pubkeys for profile fetching
+                    let author_pubkeys: std::collections::HashSet<_> = events.iter()
+                        .map(|e| e.pubkey)
+                        .collect();
+                    
+                    // Fetch author profiles from relays
+                    if !author_pubkeys.is_empty() {
+                        let pubkeys: Vec<_> = author_pubkeys.into_iter().collect();
+                        let profile_filter = Filter::new()
+                            .kind(Kind::Metadata)
+                            .authors(pubkeys)
+                            .limit(200);
+                        
+                        println!("[Search] Fetching profiles for hashtag search authors...");
+                        
+                        if let Ok(profile_events) = manager.client().fetch_events(profile_filter, std::time::Duration::from_secs(10)).await {
+                            println!("[Search] Fetched {} profile events", profile_events.len());
+                            for event in profile_events {
+                                if let Ok(db) = NostrDbManager::global() {
+                                    let _ = db.ingest_profile(&event);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Build results with resolved author info
+                    for event in events {
+                        let mut author_name = String::new();
+                        let mut author_picture = String::new();
+                        
+                        // Try to resolve author profile from cache (now populated)
+                        if let Ok(db) = NostrDbManager::global() {
+                            if let Some(profile) = db.get_profile(&event.pubkey.to_hex()) {
+                                author_name = profile.display_name.or(profile.name).unwrap_or_default();
+                                author_picture = profile.picture.unwrap_or_default();
+                            }
+                        }
+
+                        results.push(NoteResult {
+                            id: event.id.to_hex(),
+                            pubkey: event.pubkey.to_hex(),
+                            author_name,
+                            author_picture,
+                            content: event.content.clone(),
+                            created_at: event.created_at.as_secs() as i64,
+                        });
+                    }
+                }
+                
+                // Sort by created_at descending (newest first)
+                results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 
                 Ok(results)
             });
@@ -337,92 +581,8 @@ impl ffi::SearchController {
         });
     }
     
-    pub fn search_hashtag(mut self: Pin<&mut Self>, hashtag: &QString) {
-        let hashtag_str = hashtag.to_string();
-        let hashtag_clean = hashtag_str.trim_start_matches('#').to_lowercase();
-        
-        if hashtag_clean.is_empty() {
-            return;
-        }
-        
-        {
-            let mut rust = self.as_mut().rust_mut();
-            rust.query = QString::from(&format!("#{}", hashtag_clean));
-            rust.is_searching = true;
-            rust.search_type = QString::from("hashtags");
-            rust.note_results.clear();
-            rust.note_count = 0;
-        }
-        self.as_mut().set_is_searching(true);
-        self.as_mut().set_note_count(0);
-        self.as_mut().set_search_type(QString::from("hashtags"));
-        
-        let qt_thread = self.qt_thread();
-        
-        std::thread::spawn(move || {
-            let result = SEARCH_RUNTIME.block_on(async {
-                let rm = SEARCH_RELAY_MANAGER.read().unwrap();
-                let Some(manager) = rm.as_ref() else {
-                    return Err("Relay manager not initialized".to_string());
-                };
-                
-                let mut results = Vec::new();
-                
-                // Search by hashtag tag
-                let filter = Filter::new()
-                    .kind(Kind::TextNote)
-                    .hashtag(hashtag_clean.clone())
-                    .limit(100);
-                
-                if let Ok(events) = manager.client().fetch_events(filter, std::time::Duration::from_secs(15)).await {
-                    for event in events {
-                        let mut author_name = String::new();
-                        let mut author_picture = String::new();
-                        
-                        // Try to resolve author profile
-                        if let Ok(db) = NostrDbManager::global() {
-                            if let Some(profile) = db.get_profile(&event.pubkey.to_hex()) {
-                                author_name = profile.display_name.or(profile.name).unwrap_or_default();
-                                author_picture = profile.picture.unwrap_or_default();
-                            }
-                        }
-
-                        results.push(NoteResult {
-                            id: event.id.to_hex(),
-                            pubkey: event.pubkey.to_hex(),
-                            author_name,
-                            author_picture,
-                            content: event.content.clone(),
-                            created_at: event.created_at.as_secs() as i64,
-                        });
-                    }
-                }
-                
-                Ok(results)
-            });
-            
-            let _ = qt_thread.queue(move |mut qobject| {
-                match result {
-                    Ok(results) => {
-                        let count = results.len() as i32;
-                        {
-                            let mut rust = qobject.as_mut().rust_mut();
-                            rust.note_results = results;
-                            rust.note_count = count;
-                            rust.is_searching = false;
-                        }
-                        qobject.as_mut().set_note_count(count);
-                        qobject.as_mut().set_is_searching(false);
-                        qobject.as_mut().search_completed();
-                    }
-                    Err(e) => {
-                        qobject.as_mut().rust_mut().is_searching = false;
-                        qobject.as_mut().set_is_searching(false);
-                        qobject.as_mut().error_occurred(QString::from(&e));
-                    }
-                }
-            });
-        });
+    pub fn set_time_range(mut self: Pin<&mut Self>, days: i32) {
+        self.as_mut().set_time_range_days(days);
     }
     
     pub fn get_user(&self, index: i32) -> QString {

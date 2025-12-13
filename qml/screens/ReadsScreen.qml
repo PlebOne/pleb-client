@@ -246,6 +246,37 @@ Rectangle {
                 
                 Item { Layout.fillWidth: true }
                 
+                // Compose Article button
+                Button {
+                    text: "✍️ Write"
+                    onClicked: articleComposer.open()
+                    
+                    contentItem: RowLayout {
+                        spacing: 6
+                        Text {
+                            text: "✍️"
+                            font.pixelSize: 14
+                        }
+                        Text {
+                            text: "Write"
+                            color: "#ffffff"
+                            font.pixelSize: 13
+                            font.weight: Font.Medium
+                        }
+                    }
+                    
+                    background: Rectangle {
+                        implicitWidth: 80
+                        implicitHeight: 32
+                        radius: 16
+                        color: parent.hovered ? "#a855f7" : "#9333ea"
+                        
+                        Behavior on color {
+                            ColorAnimation { duration: 150 }
+                        }
+                    }
+                }
+                
                 Button {
                     text: "🔄"
                     onClicked: if (feedController) feedController.refresh()
@@ -358,6 +389,19 @@ Rectangle {
                     color: "#888888"
                     font.pixelSize: 14
                 }
+            }
+        }
+    }
+    
+    // Article Composer Dialog
+    ArticleComposer {
+        id: articleComposer
+        feedController: root.feedController
+        
+        onPublished: function(eventId) {
+            // Refresh the feed to show the new article
+            if (feedController) {
+                feedController.refresh()
             }
         }
     }

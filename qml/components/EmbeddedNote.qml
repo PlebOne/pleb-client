@@ -179,7 +179,7 @@ Rectangle {
                     text: noteData?.authorNip05 ? "✓" : ""
                     color: "#9333ea"
                     font.pixelSize: 10
-                    visible: noteData?.authorNip05
+                    visible: !!noteData?.authorNip05
                 }
             }
             

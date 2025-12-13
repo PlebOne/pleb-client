@@ -68,6 +68,7 @@ pub struct DisplayNote {
     pub videos: Vec<String>,
     pub is_reply: bool,
     pub reply_to: Option<String>,
+    pub reply_to_author_name: Option<String>,
     pub is_repost: bool,
     pub repost_author_name: Option<String>,
     pub repost_author_picture: Option<String>,
@@ -82,6 +83,15 @@ pub struct DisplayNote {
 impl DisplayNote {
     /// Create from a nostr-sdk Event
     pub fn from_event(event: &Event, profile: Option<&ProfileCache>) -> Self {
+        Self::from_event_with_profiles(event, profile, &std::collections::HashMap::new())
+    }
+    
+    /// Create from a nostr-sdk Event with access to profiles cache for reply-to author lookup
+    pub fn from_event_with_profiles(
+        event: &Event, 
+        profile: Option<&ProfileCache>,
+        profiles: &std::collections::HashMap<String, ProfileCache>
+    ) -> Self {
         let id = event.id.to_hex();
         let pubkey = event.pubkey.to_hex();
         let kind = event.kind.as_u16();
@@ -115,8 +125,14 @@ impl DisplayNote {
         // Extract media URLs from content
         let (images, videos) = extract_media_urls(&content);
         
-        // Check if this is a reply
-        let (is_reply, reply_to) = check_reply_status(event);
+        // Check if this is a reply (now also returns author pubkey)
+        let (is_reply, reply_to, reply_to_author_pubkey) = check_reply_status(event);
+        
+        // Look up reply-to author name from profiles cache
+        let reply_to_author_name = reply_to_author_pubkey.as_ref().and_then(|pk| {
+            profiles.get(pk).and_then(|p| p.name.clone())
+                .or_else(|| Some(format_npub(pk)))
+        });
         
         // Get author info from profile cache
         let (author_name, author_picture, author_nip05) = profile
@@ -176,6 +192,7 @@ impl DisplayNote {
             videos,
             is_reply,
             reply_to,
+            reply_to_author_name,
             is_repost,
             repost_author_name,
             repost_author_picture,
@@ -207,6 +224,7 @@ impl DisplayNote {
             "videos": self.videos,
             "isReply": self.is_reply,
             "replyTo": self.reply_to,
+            "replyToAuthorName": self.reply_to_author_name,
             "isRepost": self.is_repost,
             "repostAuthorName": self.repost_author_name,
             "repostAuthorPicture": self.repost_author_picture,
@@ -325,7 +343,7 @@ impl FeedManager {
             .map(|e| {
                 let pubkey_hex = e.pubkey.to_hex();
                 let profile = self.profiles.get(&pubkey_hex);
-                DisplayNote::from_event(e, profile)
+                DisplayNote::from_event_with_profiles(e, profile, &self.profiles)
             })
             .collect();
         
@@ -388,7 +406,7 @@ impl FeedManager {
             .map(|e| {
                 let pubkey_hex = e.pubkey.to_hex();
                 let profile = self.profiles.get(&pubkey_hex);
-                DisplayNote::from_event(e, profile)
+                DisplayNote::from_event_with_profiles(e, profile, &self.profiles)
             })
             .collect();
         
@@ -431,27 +449,72 @@ fn extract_media_urls(content: &str) -> (Vec<String>, Vec<String>) {
     (images, videos)
 }
 
-/// Check if event is a reply and get the reply-to ID
-fn check_reply_status(event: &Event) -> (bool, Option<String>) {
+/// Check if event is a reply and get the reply-to ID and author pubkey
+fn check_reply_status(event: &Event) -> (bool, Option<String>, Option<String>) {
+    // First look for proper NIP-10 reply markers
     for tag in event.tags.iter() {
-        if let Some(TagStandard::Event { event_id, marker, .. }) = tag.as_standardized() {
+        if let Some(TagStandard::Event { event_id, marker, public_key, .. }) = tag.as_standardized() {
             // Has an event reference with reply marker
             if marker.is_some() {
-                return (true, Some(event_id.to_hex()));
+                let author_pubkey = public_key.map(|pk| pk.to_hex());
+                return (true, Some(event_id.to_hex()), author_pubkey);
             }
         }
     }
     
     // Check for old-style replies (just 'e' tag without marker)
+    // Try to find corresponding 'p' tag for the author
+    let mut reply_event_id = None;
     for tag in event.tags.iter() {
         if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::E)) {
             if let Some(id) = tag.content() {
-                return (true, Some(id.to_string()));
+                reply_event_id = Some(id.to_string());
+                break;
             }
         }
     }
     
-    (false, None)
+    if let Some(event_id) = reply_event_id {
+        // Try to find author pubkey from 'p' tags
+        for tag in event.tags.iter() {
+            if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::P)) {
+                if let Some(pubkey) = tag.content() {
+                    return (true, Some(event_id), Some(pubkey.to_string()));
+                }
+            }
+        }
+        return (true, Some(event_id), None);
+    }
+    
+    (false, None, None)
+}
+
+/// Extract all reply-to author pubkeys from a list of events
+/// This is useful for fetching profiles of users being replied to
+pub fn extract_reply_to_pubkeys<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<String> {
+    let mut pubkeys = std::collections::HashSet::new();
+    
+    for event in events {
+        // Check for NIP-10 style tags with public_key
+        for tag in event.tags.iter() {
+            if let Some(TagStandard::Event { public_key, .. }) = tag.as_standardized() {
+                if let Some(pk) = public_key {
+                    pubkeys.insert(pk.to_hex());
+                }
+            }
+        }
+        
+        // Also check 'p' tags for old-style replies
+        for tag in event.tags.iter() {
+            if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::P)) {
+                if let Some(pubkey) = tag.content() {
+                    pubkeys.insert(pubkey.to_string());
+                }
+            }
+        }
+    }
+    
+    pubkeys.into_iter().collect()
 }
 
 /// Format pubkey as shortened npub

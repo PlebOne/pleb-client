@@ -854,6 +854,7 @@ Rectangle {
                             videos = note.videos || []
                             isReply = note.isReply || false
                             replyTo = note.replyTo || ""
+                            replyToAuthorName = note.replyToAuthorName || ""
                             isRepost = note.isRepost || false
                             repostAuthorName = note.repostAuthorName || ""
                             repostAuthorPicture = note.repostAuthorPicture || ""

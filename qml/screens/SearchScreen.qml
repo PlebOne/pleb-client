@@ -13,12 +13,29 @@ Rectangle {
     
     signal openProfile(string pubkey)
     signal openThread(string noteId)
+
+    // Local reactive properties that get updated when search completes
+    // These drive the ListView models and are updated explicitly to ensure reactivity
+    property int localNoteCount: 0
+    property int localUserCount: 0
+    property string localSearchType: "notes"
+
+    // Update local properties from controller
+    function syncFromController() {
+        if (searchController) {
+            localNoteCount = Number(searchController.note_count) || 0
+            localUserCount = Number(searchController.user_count) || 0
+            localSearchType = String(searchController.search_type || "notes")
+            console.log("[SearchScreen] syncFromController: notes=", localNoteCount, "users=", localUserCount, "type=", localSearchType)
+        }
+    }
     
     // Keyboard navigation
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
             searchInput.clear()
             searchController.clear_results()
+            syncFromController()
             event.accepted = true
         } else if (event.key === Qt.Key_Slash && !searchInput.activeFocus) {
             searchInput.forceActiveFocus()
@@ -29,18 +46,43 @@ Rectangle {
     Connections {
         target: searchController
         ignoreUnknownSignals: true
+        
         function onSearch_completed() {
-            console.log("[SearchScreen] Search completed - users:", searchController.user_count, "notes:", searchController.note_count, "search_type:", searchController.search_type)
+            console.log("[SearchScreen] search_completed signal received")
+            root.syncFromController()
+            console.log(
+                "[SearchScreen] After sync: type=", root.localSearchType,
+                "noteCount=", root.localNoteCount,
+                "userCount=", root.localUserCount,
+                "noteList.visible=", noteList.visible,
+                "userList.visible=", userList.visible,
+                "noteList.model=", noteList.model,
+                "userList.model=", userList.model
+            )
         }
+        
+        function onNote_countChanged() {
+            console.log("[SearchScreen] note_count changed to", searchController.note_count)
+            root.localNoteCount = Number(searchController.note_count) || 0
+        }
+        
+        function onUser_countChanged() {
+            console.log("[SearchScreen] user_count changed to", searchController.user_count)
+            root.localUserCount = Number(searchController.user_count) || 0
+        }
+        
+        function onSearch_typeChanged() {
+            console.log("[SearchScreen] search_type changed to", searchController.search_type)
+            root.localSearchType = String(searchController.search_type || "notes")
+        }
+        
         function onError_occurred(error) {
             console.log("[SearchScreen] Error:", error)
         }
-        function onUser_countChanged() {
-            console.log("[SearchScreen] user_count changed to:", searchController.user_count)
-        }
-        function onSearch_typeChanged() {
-            console.log("[SearchScreen] search_type changed to:", searchController.search_type)
-        }
+    }
+    
+    Component.onCompleted: {
+        syncFromController()
     }
     
     ColumnLayout {
@@ -50,13 +92,13 @@ Rectangle {
         // Header with search bar
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 120
+            Layout.preferredHeight: 160
             color: "#111111"
             
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 20
-                spacing: 16
+                spacing: 12
                 
                 Text {
                     text: "Search"
@@ -92,7 +134,7 @@ Rectangle {
                                 id: searchInput
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
-                                placeholderText: "Search users, notes, or #hashtags"
+                                placeholderText: "Search users, notes, or #hashtags (fuzzy match)"
                                 placeholderTextColor: "#666666"
                                 color: "#ffffff"
                                 font.pixelSize: 14
@@ -113,16 +155,31 @@ Rectangle {
                                             console.log("[SearchScreen] ERROR: searchController is null!")
                                             return
                                         }
+                                        
+                                        // Check for explicit prefixes first
                                         if (query.startsWith("#")) {
-                                            console.log("[SearchScreen] Calling search_hashtag")
+                                            console.log("[SearchScreen] Calling search_hashtag (# prefix)")
                                             searchController.search_hashtag(query)
                                         } else if (query.startsWith("@") || query.startsWith("npub")) {
-                                            console.log("[SearchScreen] Calling search_users for user query")
+                                            console.log("[SearchScreen] Calling search_users (@ or npub prefix)")
                                             searchController.search_users(query.replace(/^@/, ""))
                                         } else {
-                                            // Default: search both users and notes
-                                            console.log("[SearchScreen] Calling search_users for general query")
-                                            searchController.search_users(query)
+                                            // Use currently selected search type, default to notes
+                                            var currentType = root.localSearchType
+                                            console.log("[SearchScreen] Using current search_type:", currentType)
+                                            
+                                            if (currentType === "users") {
+                                                console.log("[SearchScreen] Calling search_users")
+                                                searchController.search_users(query)
+                                            } else if (currentType === "hashtags") {
+                                                console.log("[SearchScreen] Calling search_hashtag")
+                                                var hashQuery = query.startsWith("#") ? query : "#" + query
+                                                searchController.search_hashtag(hashQuery)
+                                            } else {
+                                                // Default to notes search (including when search_type is empty/undefined)
+                                                console.log("[SearchScreen] Calling search_notes (default)")
+                                                searchController.search_notes(query)
+                                            }
                                         }
                                         console.log("[SearchScreen] Search function called successfully")
                                     } else {
@@ -158,6 +215,7 @@ Rectangle {
                                 onClicked: {
                                     searchInput.clear()
                                     searchController.clear_results()
+                                    root.syncFromController()
                                 }
                             }
                         }
@@ -170,7 +228,7 @@ Rectangle {
                         Button {
                             text: "Users"
                             checkable: true
-                            checked: searchController && searchController.search_type === "users"
+                            checked: root.localSearchType === "users"
                             implicitHeight: 44
                             
                             ToolTip.visible: hovered
@@ -200,7 +258,7 @@ Rectangle {
                         Button {
                             text: "Notes"
                             checkable: true
-                            checked: searchController && searchController.search_type === "notes"
+                            checked: root.localSearchType === "notes"
                             implicitHeight: 44
                             
                             ToolTip.visible: hovered
@@ -230,7 +288,7 @@ Rectangle {
                         Button {
                             text: "#Tags"
                             checkable: true
-                            checked: searchController && searchController.search_type === "hashtags"
+                            checked: root.localSearchType === "hashtags"
                             implicitHeight: 44
                             
                             ToolTip.visible: hovered
@@ -260,6 +318,101 @@ Rectangle {
                                 }
                             }
                         }
+                        
+                        // Spacer
+                        Item { width: 16; height: 1 }
+                        
+                        // Time range dropdown
+                        ComboBox {
+                            id: timeRangeCombo
+                            implicitWidth: 100
+                            implicitHeight: 44
+                            
+                            model: ListModel {
+                                ListElement { text: "24 hours"; days: 1 }
+                                ListElement { text: "7 days"; days: 7 }
+                                ListElement { text: "30 days"; days: 30 }
+                                ListElement { text: "90 days"; days: 90 }
+                            }
+                            
+                            currentIndex: 1 // Default to 7 days
+                            
+                            textRole: "text"
+                            
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Time range for note searches"
+                            ToolTip.delay: 500
+                            
+                            background: Rectangle {
+                                color: parent.hovered ? "#252525" : "#1a1a1a"
+                                radius: 8
+                                border.color: "#333333"
+                                border.width: 1
+                            }
+                            
+                            contentItem: Text {
+                                leftPadding: 12
+                                rightPadding: timeRangeCombo.indicator.width + 8
+                                text: timeRangeCombo.displayText
+                                font.pixelSize: 13
+                                color: "#ffffff"
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                            
+                            indicator: Text {
+                                x: timeRangeCombo.width - width - 8
+                                y: (timeRangeCombo.height - height) / 2
+                                text: "▼"
+                                color: "#666666"
+                                font.pixelSize: 10
+                            }
+                            
+                            popup: Popup {
+                                y: timeRangeCombo.height
+                                width: timeRangeCombo.width
+                                implicitHeight: contentItem.implicitHeight
+                                padding: 1
+                                
+                                contentItem: ListView {
+                                    clip: true
+                                    implicitHeight: contentHeight
+                                    model: timeRangeCombo.popup.visible ? timeRangeCombo.delegateModel : null
+                                    currentIndex: timeRangeCombo.highlightedIndex
+                                }
+                                
+                                background: Rectangle {
+                                    color: "#1a1a1a"
+                                    border.color: "#333333"
+                                    radius: 8
+                                }
+                            }
+                            
+                            delegate: ItemDelegate {
+                                width: timeRangeCombo.width
+                                
+                                contentItem: Text {
+                                    text: model.text
+                                    color: "#ffffff"
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                
+                                highlighted: timeRangeCombo.highlightedIndex === index
+                                
+                                background: Rectangle {
+                                    color: highlighted ? "#333333" : "transparent"
+                                }
+                            }
+                            
+                            onCurrentIndexChanged: {
+                                var days = model.get(currentIndex).days
+                                console.log("[SearchScreen] Time range changed to:", days, "days")
+                                if (searchController) {
+                                    searchController.set_time_range(days)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -276,10 +429,18 @@ Rectangle {
                 id: userList
                 anchors.fill: parent
                 anchors.margins: 20
+                visible: root.localSearchType === "users"
                 clip: true
                 spacing: 8
+
+                onVisibleChanged: {
+                    console.log("[SearchScreen] userList.visible=", visible, "model=", model, "count=", count)
+                }
+                onCountChanged: {
+                    console.log("[SearchScreen] userList.count=", count, "model=", model)
+                }
                 
-                model: searchController ? searchController.user_count : 0
+                model: root.localUserCount
                 
                 delegate: Rectangle {
                     id: userDelegate
@@ -287,14 +448,30 @@ Rectangle {
                     height: 80
                     color: mouseArea.containsMouse ? "#1a1a1a" : "transparent"
                     radius: 12
+
+                    // Track delegate reuse / index updates
+                    property int displayIndex: index
                     
                     property var userData: null
                     
                     Component.onCompleted: {
+                        loadData()
+                    }
+
+                    onDisplayIndexChanged: loadData()
+
+                    function loadData() {
                         if (searchController) {
-                            var json = searchController.get_user(index)
+                            var json = searchController.get_user(displayIndex)
                             if (json) {
-                                userData = JSON.parse(json)
+                                try {
+                                    userData = JSON.parse("" + json)
+                                } catch (e) {
+                                    console.log("[SearchScreen] Error parsing user data:", e)
+                                    userData = null
+                                }
+                            } else {
+                                userData = null
                             }
                         }
                     }
@@ -390,34 +567,60 @@ Rectangle {
                 id: noteList
                 anchors.fill: parent
                 anchors.margins: 20
-                visible: searchController && (searchController.search_type === "notes" || searchController.search_type === "hashtags")
+                visible: root.localSearchType === "notes" || root.localSearchType === "hashtags"
                 clip: true
                 spacing: 8
+
+                onVisibleChanged: {
+                    console.log("[SearchScreen] noteList.visible=", visible, "model=", model, "count=", count)
+                }
+                onCountChanged: {
+                    console.log("[SearchScreen] noteList.count=", count, "model=", model)
+                }
                 
-                model: searchController ? searchController.note_count : 0
+                model: root.localNoteCount
                 
                 delegate: NoteCard {
                     id: noteDelegate
                     width: noteList.width
                     feedController: root.feedController
+
+                    // Track delegate reuse / index updates
+                    property int displayIndex: index
                     
                     Component.onCompleted: loadData()
+                    onDisplayIndexChanged: loadData()
                     
                     function loadData() {
                         if (searchController) {
                             try {
-                                var json = searchController.get_note(index)
+                                var json = searchController.get_note(displayIndex)
                                 if (json) {
-                                    var note = JSON.parse(json)
+                                    var note = JSON.parse("" + json)
                                     noteId = note.id || ""
                                     authorPubkey = note.pubkey || ""
                                     authorName = note.authorName || "Unknown"
                                     authorPicture = note.authorPicture || ""
+                                    authorNip05 = note.authorNip05 || ""
                                     content = note.content || ""
                                     createdAt = note.createdAt || 0
+                                    likes = note.likes || 0
+                                    reposts = note.reposts || 0
+                                    replies = note.replies || 0
+                                    zapAmount = note.zapAmount || 0
+                                    zapCount = note.zapCount || 0
+                                    reactions = note.reactions || {}
+                                    images = note.images || []
+                                    videos = note.videos || []
+                                    isReply = note.isReply || false
+                                    replyTo = note.replyTo || ""
+                                    replyToAuthorName = note.replyToAuthorName || ""
+                                    isRepost = note.isRepost || false
+                                    repostAuthorName = note.repostAuthorName || ""
+                                    repostAuthorPicture = note.repostAuthorPicture || ""
                                 }
                             } catch (e) {
-                                console.log("Error parsing note data:", e)
+                                console.log("[SearchScreen] Error parsing note data:", e)
                             }
                         }
                     }
@@ -452,7 +655,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: 12
                 visible: !searchController || (!searchController.is_searching && 
-                    searchController.user_count === 0 && searchController.note_count === 0)
+                    root.localUserCount === 0 && root.localNoteCount === 0)
                 
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -488,8 +691,8 @@ Rectangle {
     Rectangle {
         anchors.bottom: parent.bottom
         anchors.right: parent.right
-        width: 300
-        height: 150
+        width: 320
+        height: 180
         color: "black"
         opacity: 0.8
         z: 9999
@@ -498,9 +701,11 @@ Rectangle {
             anchors.centerIn: parent
             spacing: 5
             Text { color: "white"; text: "Controller: " + (searchController ? "OK" : "NULL") }
-            Text { color: "white"; text: "User Count: " + (searchController ? searchController.user_count : "?") }
-            Text { color: "white"; text: "Note Count: " + (searchController ? searchController.note_count : "?") }
-            Text { color: "white"; text: "Search Type: " + (searchController ? searchController.search_type : "?") }
+            Text { color: "lime"; text: "Local Note Count: " + root.localNoteCount }
+            Text { color: "lime"; text: "Local User Count: " + root.localUserCount }
+            Text { color: "lime"; text: "Local Search Type: " + root.localSearchType }
+            Text { color: "yellow"; text: "Rust note_count: " + (searchController ? searchController.note_count : "?") }
+            Text { color: "yellow"; text: "Rust user_count: " + (searchController ? searchController.user_count : "?") }
             Text { color: "white"; text: "Is Searching: " + (searchController ? searchController.is_searching : "?") }
         }
     }

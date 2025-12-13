@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 APP_ID="one.pleb.PlebClient"
 BUILD_DIR="build/flatpak"
 REPO_DIR="build/flatpak-repo"
@@ -14,19 +14,16 @@ mkdir -p "$BUILD_DIR" "$REPO_DIR" "build"
 
 # Generate cargo sources for offline build
 echo "Generating cargo sources..."
-if ! command -v flatpak-cargo-generator.py &> /dev/null; then
-    # Download the generator if not available
-    if [ ! -f "/tmp/flatpak-cargo-generator.py" ]; then
-        curl -L -o /tmp/flatpak-cargo-generator.py \
-            https://raw.githubusercontent.com/nicokoch/flatpak-cargo-generator/master/flatpak-cargo-generator.py
-        chmod +x /tmp/flatpak-cargo-generator.py
-    fi
-    CARGO_GENERATOR="/tmp/flatpak-cargo-generator.py"
+if command -v flatpak-cargo-generator &> /dev/null; then
+    CARGO_GENERATOR="flatpak-cargo-generator"
+elif [ -f "$HOME/.local/bin/flatpak-cargo-generator" ]; then
+    CARGO_GENERATOR="$HOME/.local/bin/flatpak-cargo-generator"
 else
-    CARGO_GENERATOR="flatpak-cargo-generator.py"
+    echo "Error: flatpak-cargo-generator not found. Install with: pip install flatpak-cargo-generator"
+    exit 1
 fi
 
-python3 "$CARGO_GENERATOR" Cargo.lock -o packaging/flatpak/cargo-sources.json
+$CARGO_GENERATOR Cargo.lock -o packaging/flatpak/cargo-sources.json
 
 # Install required SDK extensions
 echo "Installing Flatpak SDK extensions..."

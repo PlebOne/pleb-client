@@ -242,6 +242,7 @@ Rectangle {
                     videos: delegateItem.noteData.videos || []
                     isReply: delegateItem.noteData.isReply || false
                     replyTo: delegateItem.noteData.replyTo || ""
+                    replyToAuthorName: delegateItem.noteData.replyToAuthorName || ""
                     isRepost: delegateItem.noteData.isRepost || false
                     repostAuthorName: delegateItem.noteData.repostAuthorName || ""
                     repostAuthorPicture: delegateItem.noteData.repostAuthorPicture || ""

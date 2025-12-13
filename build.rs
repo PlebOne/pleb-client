@@ -43,6 +43,8 @@ fn main() {
                 "qml/screens/ReadsScreen.qml",
                 "qml/screens/ArticleScreen.qml",
                 "qml/components/ArticleCard.qml",
+                "qml/components/ArticleComposer.qml",
+                "qml/components/GifPicker.qml",
             ],
             ..Default::default()
         })

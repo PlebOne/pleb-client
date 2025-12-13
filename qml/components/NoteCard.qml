@@ -29,6 +29,7 @@ Rectangle {
     property var videos: []
     property bool isReply: false
     property string replyTo: ""
+    property string replyToAuthorName: ""
     property bool isRepost: false
     property string repostAuthorName: ""
     property string repostAuthorPicture: ""
@@ -182,7 +183,7 @@ Rectangle {
             }
             
             Text {
-                text: "Replying to a note"
+                text: replyToAuthorName ? "Replying to " + replyToAuthorName : "Replying to a note"
                 color: "#666666"
                 font.pixelSize: 12
             }
@@ -358,9 +359,18 @@ Rectangle {
                     id: imageContainer
                     // For single images, use up to full width; for multiple, use half width
                     property real maxWidth: images.length === 1 ? contentColumn.width : Math.min((contentColumn.width - 8) / 2, 250)
+                    // Check if this is a GIF
+                    property bool isGif: modelData.toLowerCase().endsWith(".gif")
                     // Use actual aspect ratio when loaded, fallback to 4:3
-                    property real aspectRatio: galleryImage.status === Image.Ready && galleryImage.implicitWidth > 0 ? 
-                        galleryImage.implicitHeight / galleryImage.implicitWidth : 0.75
+                    property real aspectRatio: {
+                        if (isGif) {
+                            return animatedImage.status === Image.Ready && animatedImage.implicitWidth > 0 ? 
+                                animatedImage.implicitHeight / animatedImage.implicitWidth : 0.75
+                        } else {
+                            return galleryImage.status === Image.Ready && galleryImage.implicitWidth > 0 ? 
+                                galleryImage.implicitHeight / galleryImage.implicitWidth : 0.75
+                        }
+                    }
                     
                     width: maxWidth
                     // Height based on image aspect ratio, with max height constraint
@@ -369,12 +379,14 @@ Rectangle {
                     color: "#2a2a2a"
                     clip: true
                     
+                    // Static image (for non-GIF)
                     Image {
                         id: galleryImage
+                        visible: !imageContainer.isGif
                         anchors.centerIn: parent
                         width: parent.width
                         height: parent.height
-                        source: modelData
+                        source: imageContainer.isGif ? "" : modelData
                         fillMode: Image.PreserveAspectFit
                         asynchronous: true
                         
@@ -401,6 +413,47 @@ Rectangle {
                             Text {
                                 anchors.centerIn: parent
                                 text: "🖼️"
+                                font.pixelSize: 24
+                                color: "#666666"
+                            }
+                        }
+                    }
+                    
+                    // Animated GIF
+                    AnimatedImage {
+                        id: animatedImage
+                        visible: imageContainer.isGif
+                        anchors.centerIn: parent
+                        width: parent.width
+                        height: parent.height
+                        source: imageContainer.isGif ? modelData : ""
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                        playing: true
+                        
+                        // Loading placeholder
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "#2a2a2a"
+                            visible: parent.status === Image.Loading
+                            
+                            BusyIndicator {
+                                anchors.centerIn: parent
+                                running: parent.visible
+                                width: 24
+                                height: 24
+                            }
+                        }
+                        
+                        // Error placeholder
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "#2a2a2a"
+                            visible: parent.status === Image.Error
+                            
+                            Text {
+                                anchors.centerIn: parent
+                                text: "🎬"
                                 font.pixelSize: 24
                                 color: "#666666"
                             }

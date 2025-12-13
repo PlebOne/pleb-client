@@ -367,7 +367,17 @@ fn truncate_content(content: &str, max_len: usize) -> String {
     if content.len() <= max_len {
         content.to_string()
     } else {
-        format!("{}...", &content[..max_len])
+        // `str` indices are byte offsets; adjust to a valid UTF-8 boundary.
+        let mut end = max_len.min(content.len());
+        while end > 0 && !content.is_char_boundary(end) {
+            end -= 1;
+        }
+
+        if end == 0 {
+            "...".to_string()
+        } else {
+            format!("{}...", &content[..end])
+        }
     }
 }
 

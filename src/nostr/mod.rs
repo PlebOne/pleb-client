@@ -8,5 +8,6 @@ pub mod dm;
 pub mod nwc;
 pub mod blossom;
 pub mod zap;
+pub mod tenor;
 
 pub use zap::GLOBAL_NWC_MANAGER;
